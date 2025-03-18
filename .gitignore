@@ -1,0 +1,29 @@
+# Исключаем папки сборки
+bin/
+obj/
+
+# Исключаем NuGet-пакеты (если они не восстанавливаются через NuGet)
+packages/
+*.nupkg
+
+# Исключаем временные и кэш-файлы
+*.log
+*.tmp
+
+# Пользовательские файлы настроек и временные файлы Visual Studio
+*.user
+*.userosscache
+*.suo
+*.sln.docstates
+
+# Файлы контроля версий для Visual Studio (если имеются)
+*.vspscc
+*.vssscc
+
+# Папка настроек Visual Studio Code (если вы не хотите делиться своими локальными настройками)
+.vscode/
+
+# Файлы, генерируемые системой Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
