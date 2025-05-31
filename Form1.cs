@@ -24,7 +24,7 @@ namespace client
 
         private readonly HttpClient _httpClient;
         private int _selectedClientId;
-        private string _selectedStudyId;
+        private string _selectedStudyId = null!;
 
         public Form1()
         {
@@ -42,7 +42,6 @@ namespace client
 
         private void InitializeComponent()
         {
-            // Поисковая строка
             txtSearch = new TextBox {
                 Location = new Point(12, 12),
                 Width = 300,
@@ -50,7 +49,6 @@ namespace client
             };
             txtSearch.KeyDown += TxtSearch_KeyDown;
 
-            // Добавить пациента
             btnAddClient = new Button {
                 Text = "Добавить пациента",
                 Location = new Point(txtSearch.Right + 10, txtSearch.Top),
@@ -62,7 +60,6 @@ namespace client
                     await SearchClientsAsync(txtSearch.Text.Trim());
             };
 
-            // Детали выбранного пациента
             txtSelectedName = new TextBox {
                 Location = new Point(12, 12),
                 Width = 300,
@@ -76,7 +73,6 @@ namespace client
                 Visible = false
             };
 
-            // Таблица
             dgvClients = new DataGridView {
                 Location = new Point(12, 40),
                 Size = new Size(600, 300),
@@ -88,7 +84,6 @@ namespace client
             };
             dgvClients.SelectionChanged += (_, __) => UpdateButtonsState();
 
-            // Подтвердить выбор клиента
             btnConfirm = new Button {
                 Text = "Подтвердить",
                 Location = new Point(12, 350),
@@ -97,7 +92,6 @@ namespace client
             };
             btnConfirm.Click += async (_, __) => await OnConfirmAsync();
 
-            // Добавить исследование
             btnUploadStudy = new Button {
                 Text = "Добавить исследование",
                 Location = new Point(140, 350),
@@ -107,16 +101,14 @@ namespace client
             };
             btnUploadStudy.Click += async (_, __) => await OnUploadStudyAsync();
 
-            // Кнопка СЕРИИ / ОТОБРАЗИТЬ
+
             btnDisplay = new Button {
                 Location = new Point(300, 350),
                 Size = new Size(120, 30),
                 Visible = false,
                 Enabled = false
             };
-            // Подписки будут в SetupStudiesGrid и SetupSeriesGrid
-
-            // Назад
+    
             btnBack = new Button {
                 Text = "Назад",
                 Location = new Point(12, 350),
@@ -186,7 +178,7 @@ namespace client
 
             btnDisplay.Visible        = true;
             btnDisplay.Text           = "Серии";
-            // Отписываем старые, подписываем новый
+
             btnDisplay.Click -= OnSeriesDisplayClicked;
             btnDisplay.Click -= OnSeriesShowClicked;
             btnDisplay.Click += OnSeriesDisplayClicked;
@@ -318,7 +310,7 @@ namespace client
 
             UpdateButtonsState();
         }
-        private void OnSeriesShowClicked(object sender, EventArgs e)
+        private void OnSeriesShowClicked(object? sender, EventArgs e)
         {
             if (dgvClients.SelectedRows.Count == 0) return;
 
