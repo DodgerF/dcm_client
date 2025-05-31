@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Threading.Tasks;
@@ -14,15 +14,30 @@ namespace client
         private readonly HttpClient _httpClient;
         private readonly string     _studyId;
         private readonly string     _seriesId;
-        private List<string>        _instanceIds = new();
+        
+        private PictureBox picBox = null!;
+        private TrackBar   trackBar = null!;
+        private TextBox    txtFrameIndex = null!;
+        private Label      lblTotalFrames = null!;
+        private Label      lblMouseCoords = null!;
+        
+        private ComboBox   cmbPresets = null!;
+        private TextBox    txtWindowWidth = null!;
+        private TextBox    txtWindowLevel = null!;
+        private Label      lblSlash = null!;
 
-        private PictureBox picBox    = null!;
-        private TrackBar  trackBar   = null!;
-        private TextBox   txtIndex   = null!;
-        private Label     lblCount   = null!;
-        private Label     lblCoords  = null!;
+        // Словарь предустановок: название → (WW, WL)
+        private readonly Dictionary<string, (int WW, int WL)> _windowPresets =
+            new Dictionary<string, (int, int)>
+            {
+                { "Мягкие ткани",      (350,   40)   },
+                { "Костные ткани",     (2000,  400)  },
+                { "Лёгкие",            (1500, -600)  },
+                { "Пользовательские",  (0,     0)    }
+            };
 
-        private int       _currentIndex = -1;
+        // Список всех instanceId-ов этой серии
+        private List<string> _instanceIds = new List<string>();
 
         public SeriesViewerForm(HttpClient httpClient, string studyId, string seriesId, string seriesName)
         {
@@ -30,272 +45,353 @@ namespace client
             _studyId    = studyId;
             _seriesId   = seriesId;
 
-            // Сначала создаём все контролы, чтобы OnResize не «падал» на null
-            InitializeControls();
-
-            // Теперь безопасно задаём размер и заголовок
             Text = $"Просмотр серии: {seriesName}";
-            ClientSize = new Size(800, 650);
-            MinimumSize = new Size(600, 500);
+            ClientSize = new Size(820, 720);
+            MinimumSize = new Size(820, 720);
 
-            // Начинаем асинхронную загрузку списка инстансов
+            InitializeControls();
+            AttachEvents();
+
+            // Асинхронно загружаем список инстансов
             _ = LoadInstanceListAsync();
         }
 
         private void InitializeControls()
         {
-            // PictureBox, занимающий всю «верхнюю» область
+            // 1. PictureBox (для вывода PNG)
             picBox = new PictureBox
             {
-                Location = new Point(0, 0),
-                Size = new Size(800, 550), // временные размеры; в OnResize подправим
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                SizeMode = PictureBoxSizeMode.Zoom,
+                Location    = new Point(10, 10),
+                Size        = new Size(780, 520),
+                SizeMode    = PictureBoxSizeMode.Zoom,
                 BorderStyle = BorderStyle.FixedSingle
             };
-            // Подписываемся на MouseMove для вычисления координат
-            picBox.MouseMove += PicBox_MouseMove;
+            Controls.Add(picBox);
 
-            // TrackBar внизу
+            // 2. TrackBar (для переключения между инстансами)
             trackBar = new TrackBar
             {
-                Location = new Point(10, 560), // временные значения
-                Size = new Size(780, 45),      // временные значения
-                Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                Minimum = 0,
-                TickStyle = TickStyle.None,
-                Enabled = false
+                Location   = new Point(10, 540),
+                Size       = new Size(780, 45),
+                Minimum    = 0,
+                Maximum    = 0,    // пока нет данных
+                TickStyle  = TickStyle.None,
+                Enabled    = false
             };
-            trackBar.Scroll += TrackBar_Scroll;
-
-            // TextBox для ввода номера снимка (1-based)
-            txtIndex = new TextBox
-            {
-                Location = new Point(10, 615), // временные
-                Size = new Size(50, 25),
-                Anchor = AnchorStyles.Bottom | AnchorStyles.Left
-            };
-            txtIndex.KeyDown += TxtIndex_KeyDown;
-
-            // Label «/ N»
-            lblCount = new Label
-            {
-                Text = "/ 0",
-                Location = new Point(65, 618), // временные
-                AutoSize = true,
-                Anchor = AnchorStyles.Bottom | AnchorStyles.Left
-            };
-
-            // Label для координат мыши (пиксели по X,Y)
-            lblCoords = new Label
-            {
-                Text = "(0, 0)",
-                AutoSize = true,
-                Anchor = AnchorStyles.Bottom | AnchorStyles.Right
-            };
-
-            Controls.Add(picBox);
             Controls.Add(trackBar);
-            Controls.Add(txtIndex);
-            Controls.Add(lblCount);
-            Controls.Add(lblCoords);
+
+            // 3. TextBox для ввода номера кадра
+            txtFrameIndex = new TextBox
+            {
+                Location  = new Point(10, 595),
+                Size      = new Size(50,  20),
+                TextAlign = HorizontalAlignment.Right,
+                Enabled   = false
+            };
+            Controls.Add(txtFrameIndex);
+
+            // 4. Label «/ total»
+            lblTotalFrames = new Label
+            {
+                Location  = new Point(65, 598),
+                AutoSize  = true,
+                Text      = "/ 0"
+            };
+            Controls.Add(lblTotalFrames);
+
+            // 5. Label для отображения координат мыши в правом нижнем углу
+            lblMouseCoords = new Label
+            {
+                Location  = new Point(690, 598),
+                AutoSize  = true,
+                Text      = "(X: 0, Y: 0)"
+            };
+            Controls.Add(lblMouseCoords);
+
+            // --- Настройки окна контрастности вниз под «/ total» ---
+            // 6. ComboBox для предустановок
+            cmbPresets = new ComboBox
+            {
+                Location      = new Point(10, 630),
+                Size          = new Size(150, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            foreach (var key in _windowPresets.Keys)
+            {
+                cmbPresets.Items.Add(key);
+            }
+            cmbPresets.SelectedItem = "Мягкие ткани";
+            Controls.Add(cmbPresets);
+
+            // 7. TextBox для WW (изначально ReadOnly, так как выбран «Мягкие ткани»)
+            txtWindowWidth = new TextBox
+            {
+                Location  = new Point(170, 630),
+                Size      = new Size(60, 25),
+                ReadOnly  = true,
+                Text      = _windowPresets["Мягкие ткани"].WW.ToString()
+            };
+            Controls.Add(txtWindowWidth);
+
+            // 8. Label «/»
+            lblSlash = new Label
+            {
+                Location = new Point(235, 633),
+                AutoSize = true,
+                Text     = "/"
+            };
+            Controls.Add(lblSlash);
+
+            // 9. TextBox для WL (изначально ReadOnly)
+            txtWindowLevel = new TextBox
+            {
+                Location  = new Point(250, 630),
+                Size      = new Size(60, 25),
+                ReadOnly  = true,
+                Text      = _windowPresets["Мягкие ткани"].WL.ToString()
+            };
+            Controls.Add(txtWindowLevel);
         }
 
+        private void AttachEvents()
+        {
+            // Событие прокрутки TrackBar
+            trackBar.Scroll += async (_, __) =>
+            {
+                int idx = trackBar.Value;
+                txtFrameIndex.Text = (idx + 1).ToString();
+                await LoadAndDisplayInstanceAsync(idx);
+            };
+
+            // Событие Enter в поле ввода номера кадра
+            txtFrameIndex.KeyDown += async (sender, e) =>
+            {
+                if (e.KeyCode == Keys.Enter)
+                {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+
+                    if (int.TryParse(txtFrameIndex.Text.Trim(), out int userIdx))
+                    {
+                        // Преобразуем 1-based в 0-based
+                        int zeroBased = userIdx - 1;
+                        if (zeroBased >= 0 && zeroBased < _instanceIds.Count)
+                        {
+                            trackBar.Value = zeroBased;
+                            await LoadAndDisplayInstanceAsync(zeroBased);
+                        }
+                        else
+                        {
+                            MessageBox.Show("Неверный номер кадра.", "Ошибка",
+                                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        }
+                    }
+                }
+            };
+
+            // Отслеживаем движение мыши по PictureBox
+            picBox.MouseMove += (sender, e) =>
+            {
+                if (picBox.Image != null)
+                {
+                    lblMouseCoords.Text = $"(X: {e.X}, Y: {e.Y})";
+                }
+            };
+
+            // Выбор пункта в ComboBox (предустановки)
+            cmbPresets.SelectedIndexChanged += (sender, e) =>
+            {
+                if (cmbPresets.SelectedItem is not string selName) return;
+                if (!_windowPresets.ContainsKey(selName)) return;
+
+                if (selName != "Пользовательские")
+                {
+                    // Если выбрана НЕ «Пользовательские», то подставляем жестко, делаем поля ReadOnly
+                    var (ww, wl) = _windowPresets[selName];
+                    txtWindowWidth.Text = ww.ToString();
+                    txtWindowLevel.Text = wl.ToString();
+
+                    txtWindowWidth.ReadOnly = true;
+                    txtWindowLevel.ReadOnly = true;
+                }
+                else
+                {
+                    // При выборе «Пользовательские» — разрешаем редактировать
+                    txtWindowWidth.ReadOnly = false;
+                    txtWindowLevel.ReadOnly = false;
+                }
+            };
+
+            // Если пользователь вручную меняет WW или WL, переключаем на «Пользовательские» и делаем текстовые поля редактируемыми
+            txtWindowWidth.TextChanged += (sender, e) => OnWindowTextChanged();
+            txtWindowLevel.TextChanged += (sender, e) => OnWindowTextChanged();
+
+            // Реагируем на изменение размера формы, чтобы PictureBox и остальные контролы растягивались
+            this.Resize += (sender, e) =>
+            {
+                picBox.Size = new Size(ClientSize.Width - 40, ClientSize.Height - 260);
+                trackBar.Size = new Size(ClientSize.Width - 40, trackBar.Height);
+                trackBar.Location = new Point(10, picBox.Bottom + 10);
+
+                txtFrameIndex.Location = new Point(10, trackBar.Bottom + 10);
+                lblTotalFrames.Location = new Point(65, trackBar.Bottom + 13);
+                lblMouseCoords.Location = new Point(ClientSize.Width - 130, trackBar.Bottom + 13);
+
+                cmbPresets.Location = new Point(10, trackBar.Bottom + 45);
+                txtWindowWidth.Location = new Point(170, trackBar.Bottom + 45);
+                lblSlash.Location = new Point(235, trackBar.Bottom + 48);
+                txtWindowLevel.Location = new Point(250, trackBar.Bottom + 45);
+
+                lblTotalFrames.Text = $"/ {_instanceIds.Count}";
+            };
+        }
+
+        /// <summary>
+        /// Если поля WW/WL изменились вручную и не соответствуют ни одной предустановке,
+        /// то переключаем ComboBox на «Пользовательские» и делаем поля editable.
+        /// </summary>
+        private void OnWindowTextChanged()
+        {
+            bool parsedWw = int.TryParse(txtWindowWidth.Text.Trim(), out int currentWw);
+            bool parsedWl = int.TryParse(txtWindowLevel.Text.Trim(), out int currentWl);
+
+            if (!parsedWw || !parsedWl)
+            {
+                SetPresetSilently("Пользовательские");
+                txtWindowWidth.ReadOnly = false;
+                txtWindowLevel.ReadOnly = false;
+                return;
+            }
+
+            // Ищём, совпадает ли пара (WW,WL) с одной из заводских пресетов (кроме «Пользовательские»)
+            foreach (var kvp in _windowPresets)
+            {
+                string presetName = kvp.Key;
+                var (presetWw, presetWl) = kvp.Value;
+
+                if (presetName == "Пользовательские") continue;
+                if (currentWw == presetWw && currentWl == presetWl)
+                {
+                    SetPresetSilently(presetName);
+                    txtWindowWidth.ReadOnly = true;
+                    txtWindowLevel.ReadOnly = true;
+                    return;
+                }
+            }
+
+            // Если не нашли точного совпадения, переключаем на «Пользовательские»
+            SetPresetSilently("Пользовательские");
+            txtWindowWidth.ReadOnly = false;
+            txtWindowLevel.ReadOnly = false;
+        }
+
+        /// <summary>
+        /// Переключает ComboBox на нужный пункт **без** вызова внешнего обработчика SelectedIndexChanged дважды.
+        /// </summary>
+        private void SetPresetSilently(string presetName)
+        {
+            if (cmbPresets.SelectedItem as string == presetName) return;
+
+            cmbPresets.SelectedIndexChanged -= CmbPresets_SelectedIndexChanged;
+            cmbPresets.SelectedItem = presetName;
+            cmbPresets.SelectedIndexChanged += CmbPresets_SelectedIndexChanged;
+        }
+
+        private void CmbPresets_SelectedIndexChanged(object? sender, EventArgs e)
+        {
+            if (cmbPresets.SelectedItem is not string selName) return;
+            if (!_windowPresets.ContainsKey(selName)) return;
+
+            if (selName != "Пользовательские")
+            {
+                var (ww, wl) = _windowPresets[selName];
+                txtWindowWidth.Text = ww.ToString();
+                txtWindowLevel.Text = wl.ToString();
+
+                txtWindowWidth.ReadOnly = true;
+                txtWindowLevel.ReadOnly = true;
+            }
+            else
+            {
+                txtWindowWidth.ReadOnly = false;
+                txtWindowLevel.ReadOnly = false;
+            }
+        }
+
+        /// <summary>
+        /// Асинхронно запрашивает у сервера список всех instanceId-ов для затронутой серии,
+        /// затем настраивает TrackBar и показывает первый кадр.
+        /// </summary>
         private async Task LoadInstanceListAsync()
         {
             try
             {
-                // Предполагаем, что сервер отдаёт JSON-массив всех InstanceId в серии
-                string url = $"api/studies/{Uri.EscapeDataString(_studyId)}/series/"
-                           + $"{Uri.EscapeDataString(_seriesId)}/instances";
-
                 _instanceIds = await _httpClient
-                    .GetFromJsonAsync<List<string>>(url)
-                    ?? new List<string>();
+                    .GetFromJsonAsync<List<string>>(
+                        $"api/studies/{_studyId}/series/{_seriesId}/instances"
+                    ) ?? new List<string>();
 
-                if (_instanceIds.Count == 0)
+                if (_instanceIds.Count > 0)
                 {
-                    MessageBox.Show("В серии нет изображений.", "Внимание",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    Close();
-                    return;
-                }
+                    trackBar.Maximum = _instanceIds.Count - 1;
+                    trackBar.Enabled = true;
+                    txtFrameIndex.Enabled = true;
+                    lblTotalFrames.Text = $"/ {_instanceIds.Count}";
 
-                // Настраиваем TrackBar, txtIndex, lblCount
-                trackBar.Maximum = _instanceIds.Count - 1;
-                trackBar.Value = 0;
-                trackBar.Enabled = true;
-
-                lblCount.Text = $"/ {_instanceIds.Count}";
-                txtIndex.Text = "1";
-
-                // Сразу загружаем первое изображение:
-                await LoadImageAtIndexAsync(0);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка при загрузке списка изображений:\n{ex.Message}",
-                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Close();
-            }
-        }
-
-        private async void TrackBar_Scroll(object? sender, EventArgs e)
-        {
-            int idx = trackBar.Value;
-            if (idx != _currentIndex)
-            {
-                await LoadImageAtIndexAsync(idx);
-            }
-        }
-
-        private async void TxtIndex_KeyDown(object? sender, KeyEventArgs e)
-        {
-            if (e.KeyCode == Keys.Enter)
-            {
-                e.Handled = true;
-                e.SuppressKeyPress = true;
-
-                if (int.TryParse(txtIndex.Text.Trim(), out int inputNumber))
-                {
-                    if (inputNumber >= 1 && inputNumber <= _instanceIds.Count)
-                    {
-                        int newIndex = inputNumber - 1;
-                        if (newIndex != _currentIndex)
-                        {
-                            trackBar.Value = newIndex;
-                            await LoadImageAtIndexAsync(newIndex);
-                        }
-                    }
-                    else
-                    {
-                        MessageBox.Show(
-                            $"Введите число от 1 до {_instanceIds.Count}.",
-                            "Неверный ввод",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Warning
-                        );
-                        txtIndex.Text = (_currentIndex + 1).ToString();
-                    }
+                    // Показать первый кадр (индекс 0)
+                    trackBar.Value = 0;
+                    txtFrameIndex.Text = "1";
+                    await LoadAndDisplayInstanceAsync(0);
                 }
                 else
                 {
-                    MessageBox.Show(
-                        "Введите корректный номер снимка (целое число).",
-                        "Неверный ввод",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning
-                    );
-                    txtIndex.Text = (_currentIndex + 1).ToString();
+                    MessageBox.Show("В серии не найдено ни одного инстанса.",
+                                    "Информация", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
+            }
+            catch (HttpRequestException ex)
+            {
+                MessageBox.Show($"Ошибка при загрузке списка инстансов:\n{ex.Message}",
+                                "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private async Task LoadImageAtIndexAsync(int idx)
+        /// <summary>
+        /// Загружает и отображает конкретный экземпляр (instance) по его индексу в списке.
+        /// При этом учитывает текущие значения WW и WL.
+        /// </summary>
+        private async Task LoadAndDisplayInstanceAsync(int index)
         {
+            if (index < 0 || index >= _instanceIds.Count) return;
+            string instId = _instanceIds[index];
+
             try
             {
-                _currentIndex = idx;
-                string instId = _instanceIds[idx];
+                // Формируем URL с параметрами ww и wl, если они корректны
+                string url = $"api/studies/{_studyId}/series/{_seriesId}/instances/{instId}/preview";
+                bool hasWw = int.TryParse(txtWindowWidth.Text.Trim(), out int ww);
+                bool hasWl = int.TryParse(txtWindowLevel.Text.Trim(), out int wl);
 
-                // URL для получения превью картинки (PNG или JPEG).
-                // Сервер должен поддерживать такой эндпоинт:
-                // GET /api/studies/{studyId}/series/{seriesId}/instances/{instanceId}/preview
-                string url = $"api/studies/{Uri.EscapeDataString(_studyId)}/series/"
-                           + $"{Uri.EscapeDataString(_seriesId)}/instances/"
-                           + $"{Uri.EscapeDataString(instId)}/preview";
+                if (hasWw && hasWl)
+                {
+                    url += $"?ww={ww}&wl={wl}";
+                }
 
-                using var stream = await _httpClient.GetStreamAsync(url);
-                var img = Image.FromStream(stream);
+                var response = await _httpClient.GetAsync(url);
+                response.EnsureSuccessStatusCode();
 
-                picBox.Image?.Dispose();
+                byte[] pngBytes = await response.Content.ReadAsByteArrayAsync();
+                using var ms = new System.IO.MemoryStream(pngBytes);
+                Image img = Image.FromStream(ms);
+
+                // Отображаем картинку
                 picBox.Image = img;
-
-                txtIndex.Text = (idx + 1).ToString();
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Не удалось загрузить картинку:\n{ex.Message}",
-                    "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Не удалось загрузить превью кадра:\n{ex.Message}",
+                                "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
-        }
-
-        private void PicBox_MouseMove(object? sender, MouseEventArgs e)
-        {
-            // Если изображения нет или контрол не инициализирован — ничего не показываем
-            if (picBox.Image == null)
-            {
-                lblCoords.Text = "(–, –)";
-                return;
-            }
-
-            // Размер оригинальной картинки
-            Size imgSize = picBox.Image.Size;
-            // Размер области, в которой картинка фактически отображается (учитывая Zoom)
-            Size ctrlSize = picBox.ClientSize;
-
-            // Вычисляем коэффициент масштабирования (один и тот же по ширине и высоте, так как SizeMode=Zoom)
-            float ratio = Math.Min(
-                (float)ctrlSize.Width / imgSize.Width,
-                (float)ctrlSize.Height / imgSize.Height
-            );
-
-            // Фактический размер, в котором изображение отрисовано
-            int drawWidth  = (int)(imgSize.Width * ratio);
-            int drawHeight = (int)(imgSize.Height * ratio);
-
-            // Смещение внутри PictureBox (центруем картинку)
-            int offsetX = (ctrlSize.Width  - drawWidth)  / 2;
-            int offsetY = (ctrlSize.Height - drawHeight) / 2;
-
-            // Координата курсора относительно области, где картинка отрисована
-            int xInImageArea = e.X - offsetX;
-            int yInImageArea = e.Y - offsetY;
-
-            if (xInImageArea < 0 || yInImageArea < 0 ||
-                xInImageArea >= drawWidth || yInImageArea >= drawHeight)
-            {
-                // Курсор «за пределами» изображения (в полях)
-                lblCoords.Text = "(–, –)";
-            }
-            else
-            {
-                // Переводим в координаты оригинального изображения
-                int imgX = (int)(xInImageArea / ratio);
-                int imgY = (int)(yInImageArea / ratio);
-                lblCoords.Text = $"({imgX}, {imgY})";
-            }
-        }
-
-        protected override void OnResize(EventArgs e)
-        {
-            base.OnResize(e);
-
-            // Если контролы ещё не созданы — выходим
-            if (picBox == null || trackBar == null || txtIndex == null || lblCount == null || lblCoords == null)
-                return;
-
-            // Минимальные допустимые размеры формы
-            int minHeight = 250;
-            int minWidth = 300;
-            if (ClientSize.Height < minHeight || ClientSize.Width < minWidth)
-                return;
-
-            // Переконфигурируем размеры и позиции контролов
-            picBox.Size = new Size(ClientSize.Width, ClientSize.Height - 100);
-
-            trackBar.Location = new Point(10, ClientSize.Height - 85);
-            trackBar.Size = new Size(ClientSize.Width - 20, 45);
-
-            txtIndex.Location = new Point(10, ClientSize.Height - 35);
-            // lblCount сразу справа от txtIndex
-            lblCount.Location = new Point(txtIndex.Right + 5, ClientSize.Height - 32);
-
-            // lblCoords — в нижнем правом углу
-            lblCoords.Location = new Point(
-                ClientSize.Width - lblCoords.PreferredWidth - 10,
-                ClientSize.Height - lblCoords.PreferredHeight - 5
-            );
         }
     }
 }
