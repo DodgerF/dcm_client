@@ -1,7 +1,8 @@
 namespace client;
 
-public class ResearchDto
+public class StudyDto
 {
-    public string OrthancId { get; set; } = "";
+    public string StudyId   { get; set; } = "";
     public DateTime StudyDate { get; set; }
+    public string StudyName { get; set; } = "";
 }

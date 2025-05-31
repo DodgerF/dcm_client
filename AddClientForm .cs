@@ -2,17 +2,23 @@ using System;
 using System.Drawing;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace client;
+
 public class AddClientForm : Form
 {
     private TextBox txtFullName = null!;
-    private TextBox txtPhone = null!;
-    private Button btnSave = null!;
-    private Button btnCancel = null!;
+    private TextBox txtPolicy   = null!;
+    private Button btnSave      = null!;
+    private Button btnCancel    = null!;
     private readonly HttpClient _httpClient;
+
+    // разрешаем ровно 4 группы по 4 цифры через пробел
+    private static readonly Regex PolicyPattern = 
+        new Regex(@"^\d{4}\s\d{4}\s\d{4}\s\d{4}$");
 
     public AddClientForm(HttpClient httpClient)
     {
@@ -29,13 +35,26 @@ public class AddClientForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
 
-        var lblName = new Label { Text = "ФИО:", Location = new Point(10, 15), AutoSize = true };
-        txtFullName = new TextBox { Location = new Point(80, 12), Width = 260 };
+        var lblName = new Label {
+            Text = "ФИО:",
+            Location = new Point(10, 15),
+            AutoSize = true
+        };
+        txtFullName = new TextBox {
+            Location = new Point(80, 12),
+            Width = 260
+        };
 
-
-        var lblPhone = new Label { Text = "Телефон:", Location = new Point(10, 50), AutoSize = true };
-        txtPhone = new TextBox { Location = new Point(80, 47), Width = 260 };
-
+        var lblPolicy = new Label {
+            Text = "Полис:",
+            Location = new Point(10, 50),
+            AutoSize = true
+        };
+        txtPolicy = new TextBox {
+            Location = new Point(80, 47),
+            Width = 260,
+            PlaceholderText = "xxxx xxxx xxxx xxxx"
+        };
 
         btnSave = new Button
         {
@@ -54,8 +73,8 @@ public class AddClientForm : Form
 
         Controls.Add(lblName);
         Controls.Add(txtFullName);
-        Controls.Add(lblPhone);
-        Controls.Add(txtPhone);
+        Controls.Add(lblPolicy);
+        Controls.Add(txtPolicy);
         Controls.Add(btnSave);
         Controls.Add(btnCancel);
 
@@ -65,27 +84,40 @@ public class AddClientForm : Form
 
     private async Task SaveAsync()
     {
-        if (string.IsNullOrWhiteSpace(txtFullName.Text) ||
-            string.IsNullOrWhiteSpace(txtPhone.Text))
+        string name   = txtFullName.Text.Trim();
+        string policy = txtPolicy.Text.Trim();
+
+        if (string.IsNullOrWhiteSpace(name) ||
+            string.IsNullOrWhiteSpace(policy))
         {
             MessageBox.Show("Заполните оба поля.", "Ошибка",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
+        if (!PolicyPattern.IsMatch(policy))
+        {
+            MessageBox.Show(
+                "Неверный формат полиса.",
+                "Ошибка",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning
+            );
+            return;
+        }
+
         try
         {
-            var req = new 
+            var req = new
             {
-                fullName    = txtFullName.Text.Trim(),
-                phoneNumber = txtPhone.Text.Trim()
+                fullName  = name,
+                medPolicy = policy
             };
-            var resp = await _httpClient
-                .PostAsJsonAsync("api/clients", req);
+            var resp = await _httpClient.PostAsJsonAsync("api/clients", req);
 
             if (resp.IsSuccessStatusCode)
             {
-                MessageBox.Show("Пациент успешно добавлен.", "OK",
+                MessageBox.Show("Пациент успешно добавлен.", "Успех",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 DialogResult = DialogResult.OK;
                 Close();
