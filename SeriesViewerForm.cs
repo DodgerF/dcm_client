@@ -34,10 +34,10 @@ namespace client
         private Button     btnR  = null!;
         private Button     btnS  = null!;
 
-        // TextBox для результата HU (ReadOnly)
-        private TextBox    txtHuResult = null!;
+        // TextBox для вывода результата (HU или расстояние)
+        private TextBox    txtResult = null!;
 
-        // Для зума/панорамы: оригинал и текущая версия картинки
+        // Для зума/панорамы: оригинальное и текущее масштабированное изображение
         private Bitmap?    _originalImage;
         private Bitmap?    _currentScaledImage;
         private float      _zoomFactor = 1.0f;
@@ -45,11 +45,11 @@ namespace client
         private const float MinZoom = 0.1f;
         private const float MaxZoom = 10.0f;
 
-        // Смещение (offset) картинки внутри picBox для панорамирования
+        // Смещение изображения внутри picBox для панорамирования
         private int _offsetX = 0;
         private int _offsetY = 0;
 
-        // Флаги и данные для перетаскивания (панорамы)
+        // Флаги и данные для перетаскивания (панорама) на ПКМ
         private bool _isPanning = false;
         private int  _panStartMouseX = 0;
         private int  _panStartMouseY = 0;
@@ -66,15 +66,26 @@ namespace client
                 { "Пользовательские",  (0,     0)    }
             };
 
-        // Список instanceId-ов этой серии
+        // Список instanceId-ов текущей серии
         private List<string> _instanceIds = new List<string>();
 
-        // Флаг режима «HU»
+        // HU-режим
         private bool _huMode = false;
 
-        // Храним координаты маркера в пикселях оригинального изображения
-        private int? _markerImgX = null;
-        private int? _markerImgY = null;
+        // Данные маркера HU (пиксели оригинала + instanceId)
+        private int?   _huImgX = null;
+        private int?   _huImgY = null;
+        private string? _huInstId = null;
+
+        // R-режим (линейка)
+        private bool _rMode = false;
+        private bool _rAwaitingSecond = false;
+        private string? _rInstId1 = null;
+        private int?    _rImgX1 = null;
+        private int?    _rImgY1 = null;
+        private string? _rInstId2 = null;
+        private int?    _rImgX2 = null;
+        private int?    _rImgY2 = null;
 
         public SeriesViewerForm(HttpClient httpClient, string studyId, string seriesId, string seriesName)
         {
@@ -83,8 +94,8 @@ namespace client
             _seriesId   = seriesId;
 
             Text = $"Просмотр серии: {seriesName}";
-            ClientSize = new Size(820, 760);
-            MinimumSize = new Size(820, 760);
+            ClientSize = new Size(820, 780);
+            MinimumSize = new Size(820, 780);
 
             InitializeControls();
             AttachEvents();
@@ -121,7 +132,6 @@ namespace client
                 Text      = "(X: -, Y: -)",
                 Anchor    = AnchorStyles.Bottom | AnchorStyles.Right
             };
-            // Начальное позиционирование: 15px слева от правого края, 5px снизу
             lblMouseCoords.Location = new Point(
                 picBox.ClientSize.Width - lblMouseCoords.Width - 15,
                 picBox.ClientSize.Height - lblMouseCoords.Height - 5
@@ -173,8 +183,6 @@ namespace client
             //
             // --- Блок предустановок + WW/WL под номером кадра ---
             //
-            // 5. ComboBox с предустановками
-            //
             cmbPresets = new ComboBox
             {
                 Location      = new Point(10, txtFrameIndex.Bottom + 15),
@@ -189,9 +197,6 @@ namespace client
             cmbPresets.SelectedItem = "Мягкие ткани";
             Controls.Add(cmbPresets);
 
-            //
-            // 6. Label «Window Width:»
-            //
             lblWW = new Label
             {
                 Location = new Point(170, txtFrameIndex.Bottom + 20),
@@ -201,9 +206,6 @@ namespace client
             };
             Controls.Add(lblWW);
 
-            //
-            // 7. TextBox для WW
-            //
             txtWindowWidth = new TextBox
             {
                 Location = new Point(lblWW.Right + 5, txtFrameIndex.Bottom + 15),
@@ -214,9 +216,6 @@ namespace client
             };
             Controls.Add(txtWindowWidth);
 
-            //
-            // 8. Label «/»
-            //
             lblSlash = new Label
             {
                 Location = new Point(txtWindowWidth.Right + 5, txtFrameIndex.Bottom + 20),
@@ -226,9 +225,6 @@ namespace client
             };
             Controls.Add(lblSlash);
 
-            //
-            // 9. Label «Window Level:»
-            //
             lblWL = new Label
             {
                 Location = new Point(lblSlash.Right + 10, txtFrameIndex.Bottom + 20),
@@ -238,9 +234,6 @@ namespace client
             };
             Controls.Add(lblWL);
 
-            //
-            // 10. TextBox для WL
-            //
             txtWindowLevel = new TextBox
             {
                 Location = new Point(lblWL.Right + 5, txtFrameIndex.Bottom + 15),
@@ -283,16 +276,16 @@ namespace client
             Controls.Add(btnS);
 
             //
-            // 11. TextBox для результата HU (ReadOnly)
+            //  . TextBox для результата (HU или расстояние)
             //
-            txtHuResult = new TextBox
+            txtResult = new TextBox
             {
                 Location  = new Point(10, btnHU.Bottom + 15),
                 Size      = new Size(400, 25),
                 ReadOnly  = true,
                 Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
-            Controls.Add(txtHuResult);
+            Controls.Add(txtResult);
         }
 
         private void AttachEvents()
@@ -348,13 +341,12 @@ namespace client
                 int sW = _currentScaledImage.Width;
                 int sH = _currentScaledImage.Height;
 
-                // Координаты курсора относительно области, где рисуется картинка:
+                // Координаты курсора относительно области изображения
                 int relX = e.X - _offsetX;
                 int relY = e.Y - _offsetY;
 
                 if (relX >= 0 && relX < sW && relY >= 0 && relY < sH)
                 {
-                    // Преобразуем в координаты оригинала
                     float imgXf = relX / _zoomFactor;
                     float imgYf = relY / _zoomFactor;
 
@@ -367,6 +359,45 @@ namespace client
                 {
                     lblMouseCoords.Text = "(X: -, Y: -)";
                 }
+
+                // Если мы в режиме пана (ПКМ зажата), панорамируем
+                if (_isPanning && _currentScaledImage != null)
+                {
+                    int dx = e.X - _panStartMouseX;
+                    int dy = e.Y - _panStartMouseY;
+                    _offsetX = _panStartOffsetX + dx;
+                    _offsetY = _panStartOffsetY + dy;
+
+                    // Проверим границы по X
+                    int imgW = _currentScaledImage.Width;
+                    int boxW = picBox.ClientSize.Width;
+                    if (imgW > boxW)
+                    {
+                        int minX = boxW - imgW;
+                        int maxX = 0;
+                        _offsetX = Math.Min(Math.Max(_offsetX, minX), maxX);
+                    }
+                    else
+                    {
+                        _offsetX = (boxW - imgW) / 2;
+                    }
+
+                    // Проверим границы по Y
+                    int imgH = _currentScaledImage.Height;
+                    int boxH = picBox.ClientSize.Height;
+                    if (imgH > boxH)
+                    {
+                        int minY = boxH - imgH;
+                        int maxY = 0;
+                        _offsetY = Math.Min(Math.Max(_offsetY, minY), maxY);
+                    }
+                    else
+                    {
+                        _offsetY = (boxH - imgH) / 2;
+                    }
+
+                    picBox.Invalidate();
+                }
             };
 
             //
@@ -375,15 +406,14 @@ namespace client
             picBox.MouseWheel += PicBox_MouseWheel;
 
             //
-            // Paint для отрисовки масштабированного изображения и маркера
+            // Paint для отрисовки изображения, маркеров и координат
             //
             picBox.Paint += PicBox_Paint;
 
             //
-            // MouseDown/MouseMove/MouseUp для панорамы
+            // MouseDown/MouseUp для панорамы (ПКМ)
             //
             picBox.MouseDown += PicBox_MouseDown;
-            picBox.MouseMove += PicBox_MouseMove;
             picBox.MouseUp   += PicBox_MouseUp;
 
             //
@@ -425,44 +455,50 @@ namespace client
             txtWindowLevel.TextChanged += (sender, e) => OnWindowTextChanged();
 
             //
-            // Кнопка HU: включаем режим, остальные — выключаем
+            // Кнопка HU: включаем HU-режим
             //
             btnHU.Click += (sender, e) =>
             {
                 _huMode = true;
+                _rMode = false;
                 btnHU.BackColor = Color.LightBlue;
-                btnR.BackColor = SystemColors.Control;
-                btnS.BackColor = SystemColors.Control;
-                ClearMarkerAndResult();
+                btnR.BackColor  = SystemColors.Control;
+                btnS.BackColor  = SystemColors.Control;
+                ClearAllMarkers();
+                txtResult.Text = "";
             };
 
             //
-            // Кнопка R: выключаем HU-режим
+            // Кнопка R: включаем R-режим (линейка)
             //
             btnR.Click += (sender, e) =>
             {
+                _rMode = true;
                 _huMode = false;
-                btnR.BackColor = Color.LightBlue;
+                _rAwaitingSecond = false;
+                btnR.BackColor  = Color.LightBlue;
                 btnHU.BackColor = SystemColors.Control;
-                btnS.BackColor = SystemColors.Control;
-                ClearMarkerAndResult();
+                btnS.BackColor  = SystemColors.Control;
+                ClearAllMarkers();
+                txtResult.Text = "";
             };
 
             //
-            // Кнопка S: выключаем HU-режим
+            // Кнопка S: сбрасываем оба режима
             //
             btnS.Click += (sender, e) =>
             {
+                _rMode = false;
                 _huMode = false;
-                btnS.BackColor = Color.LightBlue;
+                btnS.BackColor  = Color.LightBlue;
                 btnHU.BackColor = SystemColors.Control;
-                btnR.BackColor = SystemColors.Control;
-                ClearMarkerAndResult();
+                btnR.BackColor  = SystemColors.Control;
+                ClearAllMarkers();
+                txtResult.Text = "";
             };
 
             //
-            // Resize формы: trackBar и поля смещаются по Anchor,
-            // но картинка и маркер требуют перерисовки
+            // При изменении размера формы (Anchor само двигает контролы)
             //
             this.Resize += (sender, e) =>
             {
@@ -546,7 +582,7 @@ namespace client
                     trackBar.Maximum = _instanceIds.Count - 1;
                     trackBar.Enabled = true;
                     txtFrameIndex.Enabled = true;
-                    lblTotalFrames.Text = $"/ {_instanceIds.Count}";
+                    lblTotalFrames.Text  = $"/ {_instanceIds.Count}";
 
                     trackBar.Value = 0;
                     txtFrameIndex.Text = "1";
@@ -587,13 +623,10 @@ namespace client
 
                 _originalImage = new Bitmap(loaded);
                 _zoomFactor    = 1.0f;
-
-                // Центрируем картинку в picBox
                 RecalculateCurrentScaledImage();
-                CenterImageInView();
 
-                ClearMarkerAndResult();
-                lblTotalFrames.Text = $"/ {_instanceIds.Count}";
+                CenterImageInView();
+                picBox.Invalidate();
             }
             catch (Exception ex)
             {
@@ -603,88 +636,100 @@ namespace client
         }
 
         /// <summary>
-        /// Создаёт _currentScaledImage из _originalImage согласно _zoomFactor.
+        /// Пересоздаёт _currentScaledImage на основе _originalImage и _zoomFactor.
         /// </summary>
         private void RecalculateCurrentScaledImage()
         {
-            if (_originalImage == null)
-                return;
+            if (_originalImage == null) return;
 
             _currentScaledImage?.Dispose();
             int newW = (int)(_originalImage.Width * _zoomFactor);
             int newH = (int)(_originalImage.Height * _zoomFactor);
-
             _currentScaledImage = new Bitmap(_originalImage, new Size(newW, newH));
             picBox.Invalidate();
         }
 
         /// <summary>
-        /// Центрирует картинку внутри picBox, если она меньше.
-        /// Если картинка больше, просто оставляет текущее смещение.
+        /// Центрирует изображение, если оно меньше picBox; иначе оставляет текущее смещение.
         /// </summary>
         private void CenterImageInView()
         {
-            if (_currentScaledImage == null)
-                return;
+            if (_currentScaledImage == null) return;
 
             int imgW = _currentScaledImage.Width;
             int imgH = _currentScaledImage.Height;
+            int boxW = picBox.ClientSize.Width;
+            int boxH = picBox.ClientSize.Height;
 
-            // Если картинка уже меньше picBox, центрируем...
-            if (imgW < picBox.ClientSize.Width)
-                _offsetX = (picBox.ClientSize.Width - imgW) / 2;
-            // Если картинка шире, не меняем _offsetX (иначе она «съедет»).
-            if (imgH < picBox.ClientSize.Height)
-                _offsetY = (picBox.ClientSize.Height - imgH) / 2;
+            if (imgW < boxW)
+                _offsetX = (boxW - imgW) / 2;
+            if (imgH < boxH)
+                _offsetY = (boxH - imgH) / 2;
         }
 
         /// <summary>
-        /// Рисует масштабированное изображение и, если есть, квадратный маркер.
+        /// Рисует изображение, маркеры HU / R, и обновляет координаты.
         /// </summary>
         private void PicBox_Paint(object? sender, PaintEventArgs e)
         {
             if (_currentScaledImage == null || _originalImage == null)
                 return;
 
-            // 1) Рисуем масштабированное изображение по (_offsetX, _offsetY)
+            // 1) Рисуем масштабированное изображение с учётом смещений
             e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
             e.Graphics.DrawImage(_currentScaledImage, _offsetX, _offsetY, _currentScaledImage.Width, _currentScaledImage.Height);
 
-            // 2) Если есть маркер, рисуем квадрат 10×10 поверх картинки
-            if (_markerImgX != null && _markerImgY != null)
+            // 2) Маркер HU, если он установлен, и совпадает instanceId
+            if (_huImgX != null && _huImgY != null && _huInstId != null)
             {
-                int imgX = _markerImgX.Value;
-                int imgY = _markerImgY.Value;
+                string currentInst = _instanceIds[trackBar.Value];
+                if (_huInstId == currentInst)
+                {
+                    int imgX = _huImgX.Value;
+                    int imgY = _huImgY.Value;
+                    float screenXf = _offsetX + imgX * _zoomFactor;
+                    float screenYf = _offsetY + imgY * _zoomFactor;
+                    int size = 10, half = size / 2;
+                    using var brush = new SolidBrush(Color.Red);
+                    e.Graphics.FillRectangle(brush, screenXf - half, screenYf - half, size, size);
+                }
+            }
 
-                // Переводим координаты пикселя оригинала в экранные, с учётом зума и смещения
-                float screenXf = _offsetX + imgX * _zoomFactor;
-                float screenYf = _offsetY + imgY * _zoomFactor;
-
-                int size = 10; // размер квадрата-маркера
-                int half = size / 2;
-                var rect = new Rectangle(
-                    (int)screenXf - half,
-                    (int)screenYf - half,
-                    size,
-                    size
-                );
-                using var brush = new SolidBrush(Color.Red);
-                e.Graphics.FillRectangle(brush, rect);
+            // 3) Маркеры R: две точки, если заданы, и совпадают instanceId
+            if (_rImgX1 != null && _rImgY1 != null && _rInstId1 != null)
+            {
+                string currentInst = _instanceIds[trackBar.Value];
+                if (_rInstId1 == currentInst)
+                {
+                    float screenXf = _offsetX + _rImgX1.Value * _zoomFactor;
+                    float screenYf = _offsetY + _rImgY1.Value * _zoomFactor;
+                    int size = 10, half = size / 2;
+                    using var brush = new SolidBrush(Color.Green);
+                    e.Graphics.FillRectangle(brush, screenXf - half, screenYf - half, size, size);
+                }
+            }
+            if (_rImgX2 != null && _rImgY2 != null && _rInstId2 != null)
+            {
+                string currentInst = _instanceIds[trackBar.Value];
+                if (_rInstId2 == currentInst)
+                {
+                    float screenXf = _offsetX + _rImgX2.Value * _zoomFactor;
+                    float screenYf = _offsetY + _rImgY2.Value * _zoomFactor;
+                    int size = 10, half = size / 2;
+                    using var brush = new SolidBrush(Color.Green);
+                    e.Graphics.FillRectangle(brush, screenXf - half, screenYf - half, size, size);
+                }
             }
         }
 
         /// <summary>
-        /// Обработчик MouseWheel: меняем зум и пересчитываем изображение.
-        /// Сохраняем текущее смещение, но после пересчёта надо убедиться,
-        /// что картинка не ушла за границы.
+        /// Обработчик колесика мыши: зумируем картинку, удерживая курсор на том же месте.
         /// </summary>
         private void PicBox_MouseWheel(object? sender, MouseEventArgs e)
         {
-            if (_originalImage == null)
-                return;
+            if (_originalImage == null) return;
 
-            // Запомним координаты курсора в относительных пикселях до зума
-            // для того, чтобы приблизиться к тому же месту после зума.
+            // Запомним координаты курсора в координатах оригинала
             int oldImgX = (int)((e.X - _offsetX) / _zoomFactor);
             int oldImgY = (int)((e.Y - _offsetY) / _zoomFactor);
 
@@ -695,27 +740,24 @@ namespace client
 
             RecalculateCurrentScaledImage();
 
-            // После пересчёта скорректируем смещение так, чтобы курсор «остался» на той же точке изображения
+            // Пересчитаем смещение, чтобы курсор оставался над тем же пикселем
             int newScreenX = (int)(oldImgX * _zoomFactor);
             int newScreenY = (int)(oldImgY * _zoomFactor);
-
             _offsetX = e.X - newScreenX;
             _offsetY = e.Y - newScreenY;
 
-            // Но защитимся от ситуации, когда картинка меньше picBox: в этом случае центруем
             CenterImageInView();
-
             picBox.Invalidate();
         }
 
         /// <summary>
-        /// Обрабатываем MouseDown: если левая кнопка и не в HU-режиме (или даже в HU-режиме),
-        /// начинаем панораму.
+        /// При нажатии кнопки мыши: ПКМ начинает панораму, ЛКМ – обработка HU или R.
         /// </summary>
         private void PicBox_MouseDown(object? sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left)
+            if (e.Button == MouseButtons.Right)
             {
+                // Начинаем панораму
                 _isPanning = true;
                 _panStartMouseX = e.X;
                 _panStartMouseY = e.Y;
@@ -725,110 +767,62 @@ namespace client
             }
         }
 
-        /// <summary>
-        /// При движении мыши с зажатой левой кнопкой корректируем смещение (панораму).
-        /// </summary>
-        private void PicBox_MouseMove(object? sender, MouseEventArgs e)
-        {
-            if (_isPanning && _currentScaledImage != null)
-            {
-                int dx = e.X - _panStartMouseX;
-                int dy = e.Y - _panStartMouseY;
-                _offsetX = _panStartOffsetX + dx;
-                _offsetY = _panStartOffsetY + dy;
-
-                // Проверим границы: чтобы нельзя было « показать пустоту » за краем 
-                int imgW = _currentScaledImage.Width;
-                int imgH = _currentScaledImage.Height;
-                int boxW = picBox.ClientSize.Width;
-                int boxH = picBox.ClientSize.Height;
-
-                // Если картинка шире области: ограничиваем _offsetX так, чтобы ее край не вылезал
-                if (imgW > boxW)
-                {
-                    int minX = boxW - imgW; // максимально «влево»
-                    int maxX = 0;           // максимально «вправо»
-                    _offsetX = Math.Min(Math.Max(_offsetX, minX), maxX);
-                }
-                else
-                {
-                    // Если картинка уже меньше, чем box, просто центрируем
-                    _offsetX = (boxW - imgW) / 2;
-                }
-
-                // Аналогично для высоты
-                if (imgH > boxH)
-                {
-                    int minY = boxH - imgH;
-                    int maxY = 0;
-                    _offsetY = Math.Min(Math.Max(_offsetY, minY), maxY);
-                }
-                else
-                {
-                    _offsetY = (boxH - imgH) / 2;
-                }
-
-                picBox.Invalidate();
-            }
-        }
-
-        /// <summary>
-        /// По MouseUp завершаем панораму.
-        /// </summary>
         private void PicBox_MouseUp(object? sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left && _isPanning)
+            if (e.Button == MouseButtons.Right && _isPanning)
             {
                 _isPanning = false;
                 picBox.Cursor = Cursors.Default;
             }
         }
 
-        /// <summary>
-        /// При клике: если HU-режим, вычисляем координаты, рисуем квадрат и посылаем запрос.
-        /// После клика HU-режим выключается.
-        /// </summary>
+        private void PicBox_MouseMove(object? sender, MouseEventArgs e)
+        {
+            // Логика обновления координат и панорамирования реализована в MouseMove через AttachEvents
+        }
+
         private async void PicBox_MouseClick(object? sender, MouseEventArgs e)
         {
-            if (!_huMode || _currentScaledImage == null || _originalImage == null)
+            // Определяем, в каком режиме мы находимся: HU или R
+            if (_huMode)
+            {
+                await HandleHUClickAsync(e);
+            }
+            else if (_rMode)
+            {
+                await HandleRClickAsync(e);
+            }
+        }
+
+        /// <summary>
+        /// Обрабатывает клик в HU-режиме: вычисляем координаты в изображении,
+        /// запрашиваем плотность и выводим результат.
+        /// </summary>
+        private async Task HandleHUClickAsync(MouseEventArgs e)
+        {
+            if (_currentScaledImage == null || _originalImage == null)
                 return;
 
-            int imgW = _currentScaledImage.Width;
-            int imgH = _currentScaledImage.Height;
-
-            // Локальные координаты клика в области изображения:
-            int relX = e.X - _offsetX;
-            int relY = e.Y - _offsetY;
-            if (relX < 0 || relX >= imgW || relY < 0 || relY >= imgH)
+            // 1) Переводим координаты клика в пиксели оригинала
+            if (!TryGetImageCoordinates(e.X, e.Y, out int imgX, out int imgY))
                 return;
 
-            float imgXf = relX / _zoomFactor;
-            float imgYf = relY / _zoomFactor;
-            int imgX = Math.Min(Math.Max((int)imgXf, 0), _originalImage.Width - 1);
-            int imgY = Math.Min(Math.Max((int)imgYf, 0), _originalImage.Height - 1);
-
-            // Сохраняем координаты маркера
-            _markerImgX = imgX;
-            _markerImgY = imgY;
+            // Сохраняем маркер HU и выключаем режим
+            string currentInst = _instanceIds[trackBar.Value];
+            _huImgX   = imgX;
+            _huImgY   = imgY;
+            _huInstId = currentInst;
+            _huMode   = false;
+            btnHU.BackColor = SystemColors.Control;
             picBox.Invalidate();
 
-            // Отключаем HU-режим сразу
-            _huMode = false;
-            btnHU.BackColor = SystemColors.Control;
-
-            int idx = trackBar.Value;
-            string instId = _instanceIds[idx];
-
+            // 2) Запрашиваем значение HU у сервера
             try
             {
-                string reqUrl = $"api/studies/instances/{instId}/density?x={imgX}&y={imgY}";
+                string reqUrl = $"api/instances/{currentInst}/density?x={imgX}&y={imgY}";
                 var response = await _httpClient.GetAsync(reqUrl);
-                if (response.IsSuccessStatusCode)
-                {
-                    int huValue = await response.Content.ReadFromJsonAsync<int>();
-                    txtHuResult.Text = $"Плотность ткани в точке равна {huValue} HU";
-                }
-                else
+
+                if (!response.IsSuccessStatusCode)
                 {
                     string error = await response.Content.ReadAsStringAsync();
                     MessageBox.Show(
@@ -837,7 +831,22 @@ namespace client
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Error
                     );
-                    txtHuResult.Text = "";
+                    txtResult.Text = "";
+                    return;
+                }
+
+                // Читаем JSON вида {"hu":353}
+                string content = await response.Content.ReadAsStringAsync();
+                using var doc = System.Text.Json.JsonDocument.Parse(content);
+                if (doc.RootElement.TryGetProperty("hu", out var huElement) &&
+                    huElement.ValueKind == System.Text.Json.JsonValueKind.Number)
+                {
+                    int huValue = huElement.GetInt32();
+                    txtResult.Text = $"Плотность ткани в точке равна {huValue} HU";
+                }
+                else
+                {
+                    txtResult.Text = $"Неверный формат ответа: {content}";
                 }
             }
             catch (Exception ex)
@@ -848,16 +857,144 @@ namespace client
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error
                 );
-                txtHuResult.Text = "";
+                txtResult.Text = "";
             }
         }
 
-        private void ClearMarkerAndResult()
+
+        /// <summary>
+        /// Обрабатывает клик в R-режиме (линейка): последовательно запоминает две точки,
+        /// после второй — запрашивает у сервера расстояние и выводит округлённое до 3 знаков значение.
+        /// </summary>
+        private async Task HandleRClickAsync(MouseEventArgs e)
         {
-            _markerImgX = null;
-            _markerImgY = null;
-            txtHuResult.Text = "";
+            if (_currentScaledImage == null || _originalImage == null)
+                return;
+
+            // Конвертируем экранные координаты в пиксели оригинального изображения
+            if (!TryGetImageCoordinates(e.X, e.Y, out int imgX, out int imgY))
+                return;
+
+            string currentInst = _instanceIds[trackBar.Value];
+
+            if (!_rAwaitingSecond)
+            {
+                // Первая точка
+                _rInstId1        = currentInst;
+                _rImgX1          = imgX;
+                _rImgY1          = imgY;
+                _rAwaitingSecond = true;
+                picBox.Invalidate();
+            }
+            else
+            {
+                // Вторая точка
+                _rInstId2        = currentInst;
+                _rImgX2          = imgX;
+                _rImgY2          = imgY;
+                _rAwaitingSecond = false;
+                _rMode           = false;
+                btnR.BackColor   = SystemColors.Control;
+                picBox.Invalidate();
+
+                // Теперь отправляем запрос на сервер
+                if (_rInstId1 != null && _rImgX1.HasValue && _rImgY1.HasValue
+                    && _rInstId2 != null && _rImgX2.HasValue && _rImgY2.HasValue)
+                {
+                    try
+                    {
+                        string url = $"api/distance" +
+                                    $"?instanceId1={_rInstId1}" +
+                                    $"&x1={_rImgX1.Value}&y1={_rImgY1.Value}" +
+                                    $"&instanceId2={_rInstId2}" +
+                                    $"&x2={_rImgX2.Value}&y2={_rImgY2.Value}";
+
+                        var response = await _httpClient.GetAsync(url);
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            string error = await response.Content.ReadAsStringAsync();
+                            MessageBox.Show(
+                                $"Сервер вернул ошибку при расчёте расстояния:\n{error}",
+                                "Ошибка Distance",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Error
+                            );
+                            txtResult.Text = "";
+                            return;
+                        }
+
+                        // Разбираем JSON-ответ и округляем значение до 3 знаков
+                        using var stream = await response.Content.ReadAsStreamAsync();
+                        using var doc = await System.Text.Json.JsonDocument.ParseAsync(stream);
+                        if (doc.RootElement.TryGetProperty("distance", out var element) &&
+                            element.ValueKind == System.Text.Json.JsonValueKind.Number)
+                        {
+                            double distanceMm = element.GetDouble();
+                            // Округляем до 3 знаков после запятой
+                            distanceMm = Math.Round(distanceMm, 3);
+                            txtResult.Text = $"Расстояние между двумя точками {distanceMm:F3} мм";
+                        }
+                        else
+                        {
+                            txtResult.Text = "Ответ сервера не содержит поле \"distance\".";
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(
+                            $"Ошибка при запросе расстояния на сервер:\n{ex.Message}",
+                            "Ошибка Distance",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Error
+                        );
+                        txtResult.Text = "";
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Преобразует координаты мыши (screenX, screenY) в координаты внутри оригинального изображения.
+        /// Возвращает true, если клик попал в область картинки, и тогда imgX/imgY принимают реальные значения.
+        /// </summary>
+        private bool TryGetImageCoordinates(int screenX, int screenY, out int imgX, out int imgY)
+        {
+            imgX = imgY = 0;
+            if (_currentScaledImage == null || _originalImage == null)
+                return false;
+
+            int imgW = _currentScaledImage.Width;
+            int imgH = _currentScaledImage.Height;
+
+            int relX = screenX - _offsetX;
+            int relY = screenY - _offsetY;
+            if (relX < 0 || relX >= imgW || relY < 0 || relY >= imgH)
+                return false;
+
+            float xf = relX / _zoomFactor;
+            float yf = relY / _zoomFactor;
+            imgX = Math.Min(Math.Max((int)xf, 0), _originalImage.Width - 1);
+            imgY = Math.Min(Math.Max((int)yf, 0), _originalImage.Height - 1);
+            return true;
+        }
+
+
+        private void ClearAllMarkers()
+        {
+            _huImgX = null;
+            _huImgY = null;
+            _huInstId = null;
+
+            _rInstId1 = null;
+            _rImgX1 = null;
+            _rImgY1 = null;
+
+            _rInstId2 = null;
+            _rImgX2 = null;
+            _rImgY2 = null;
+
             picBox.Invalidate();
         }
+
     }
 }
