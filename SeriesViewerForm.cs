@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -29,12 +30,13 @@ namespace client
         private Label      lblWL = null!;
         private TextBox    txtWindowLevel = null!;
 
-        // Кнопки HU, R, S
+        // Кнопки HU, R, S(Area), Завершить Area
         private Button     btnHU = null!;
         private Button     btnR  = null!;
-        private Button     btnS  = null!;
+        private Button     btnArea = null!;          // Была S
+        private Button     btnCompleteArea = null!;
 
-        // TextBox для вывода результата (HU или расстояние)
+        // TextBox для вывода результата (HU, Distance или Area)
         private TextBox    txtResult = null!;
 
         // Для зума/панорамы: оригинальное и текущее масштабированное изображение
@@ -49,7 +51,7 @@ namespace client
         private int _offsetX = 0;
         private int _offsetY = 0;
 
-        // Флаги и данные для перетаскивания (панорама) на ПКМ
+        // Флаги для панорамирования ПКМ
         private bool _isPanning = false;
         private int  _panStartMouseX = 0;
         private int  _panStartMouseY = 0;
@@ -71,21 +73,27 @@ namespace client
 
         // HU-режим
         private bool _huMode = false;
-
-        // Данные маркера HU (пиксели оригинала + instanceId)
         private int?   _huImgX = null;
         private int?   _huImgY = null;
         private string? _huInstId = null;
 
-        // R-режим (линейка)
-        private bool _rMode = false;
-        private bool _rAwaitingSecond = false;
+        // R-режим (линейка): первая точка сохраняется между сменами кадров, но сбрасывается при переключении режима
+        private bool  _rMode = false;
+        private bool  _rAwaitingSecond = false;
         private string? _rInstId1 = null;
         private int?    _rImgX1 = null;
         private int?    _rImgY1 = null;
         private string? _rInstId2 = null;
         private int?    _rImgX2 = null;
         private int?    _rImgY2 = null;
+
+        // Area-режим (многоугольник)
+        private bool _areaMode = false;
+        private List<Point> _polygonPoints = new List<Point>();
+
+        // Физический размер пикселя (мм) — читаем из DICOM-метаданных при загрузке кадра
+        private double _pixelSpacingX_mm = 1.0;
+        private double _pixelSpacingY_mm = 1.0;
 
         public SeriesViewerForm(HttpClient httpClient, string studyId, string seriesId, string seriesName)
         {
@@ -94,8 +102,8 @@ namespace client
             _seriesId   = seriesId;
 
             Text = $"Просмотр серии: {seriesName}";
-            ClientSize = new Size(820, 780);
-            MinimumSize = new Size(820, 780);
+            ClientSize = new Size(820, 800);
+            MinimumSize = new Size(820, 800);
 
             InitializeControls();
             AttachEvents();
@@ -105,9 +113,7 @@ namespace client
 
         private void InitializeControls()
         {
-            //
-            // 1. PictureBox: фиксированный размер 780×520
-            //
+            // PictureBox: фиксированный размер 780×520
             picBox = new PictureBox
             {
                 Location    = new Point(10, 10),
@@ -137,12 +143,9 @@ namespace client
                 picBox.ClientSize.Height - lblMouseCoords.Height - 5
             );
             picBox.Controls.Add(lblMouseCoords);
-
             Controls.Add(picBox);
 
-            //
-            // 2. TrackBar под PictureBox
-            //
+            // TrackBar под PictureBox
             trackBar = new TrackBar
             {
                 Location   = new Point(10, picBox.Bottom + 10),
@@ -155,9 +158,7 @@ namespace client
             };
             Controls.Add(trackBar);
 
-            //
-            // 3. TextBox для номера кадра
-            //
+            // TextBox для номера кадра
             txtFrameIndex = new TextBox
             {
                 Location  = new Point(10, trackBar.Bottom + 10),
@@ -168,9 +169,7 @@ namespace client
             };
             Controls.Add(txtFrameIndex);
 
-            //
-            // 4. Label «/ total»
-            //
+            // Label «/ total»
             lblTotalFrames = new Label
             {
                 Location  = new Point(65, trackBar.Bottom + 13),
@@ -180,9 +179,7 @@ namespace client
             };
             Controls.Add(lblTotalFrames);
 
-            //
-            // --- Блок предустановок + WW/WL под номером кадра ---
-            //
+            // ComboBox с предустановками WW/WL
             cmbPresets = new ComboBox
             {
                 Location      = new Point(10, txtFrameIndex.Bottom + 15),
@@ -244,10 +241,9 @@ namespace client
             };
             Controls.Add(txtWindowLevel);
 
-            //
-            // --- Кнопки HU, R, S ---
-            //
+            // Кнопки HU, R, Area (бывшая S), Завершить Area
             int buttonsY = txtWindowLevel.Bottom + 20;
+
             btnHU = new Button
             {
                 Location = new Point(10, buttonsY),
@@ -266,22 +262,30 @@ namespace client
             };
             Controls.Add(btnR);
 
-            btnS = new Button
+            btnArea = new Button
             {
                 Location = new Point(btnR.Right + 10, buttonsY),
-                Size     = new Size(60, 30),
-                Text     = "S",
+                Size     = new Size(80, 30),
+                Text     = "S",  // переименована в S
                 Anchor   = AnchorStyles.Top | AnchorStyles.Left
             };
-            Controls.Add(btnS);
+            Controls.Add(btnArea);
 
-            //
-            //  . TextBox для результата (HU или расстояние)
-            //
+            btnCompleteArea = new Button
+            {
+                Location = new Point(btnArea.Right + 10, buttonsY),
+                Size     = new Size(100, 30),
+                Text     = "Завершить",
+                Enabled  = false,  // неактивна пока нет вершин
+                Anchor   = AnchorStyles.Top | AnchorStyles.Left
+            };
+            Controls.Add(btnCompleteArea);
+
+            // TextBox для результата (HU, Distance или Area)
             txtResult = new TextBox
             {
                 Location  = new Point(10, btnHU.Bottom + 15),
-                Size      = new Size(400, 25),
+                Size      = new Size(500, 25),
                 ReadOnly  = true,
                 Anchor    = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
@@ -290,9 +294,7 @@ namespace client
 
         private void AttachEvents()
         {
-            //
             // TrackBar: загрузка кадра при прокрутке
-            //
             trackBar.Scroll += async (_, __) =>
             {
                 int idx = trackBar.Value;
@@ -300,9 +302,7 @@ namespace client
                 await LoadAndDisplayInstanceAsync(idx);
             };
 
-            //
             // Enter в txtFrameIndex
-            //
             txtFrameIndex.KeyDown += async (sender, e) =>
             {
                 if (e.KeyCode == Keys.Enter)
@@ -327,40 +327,35 @@ namespace client
                 }
             };
 
-            //
-            // MouseMove внутри picBox: обновляем lblMouseCoords
-            //
+            // MouseMove внутри picBox: обновление координат и панорамирование ПКМ
             picBox.MouseMove += (sender, e) =>
             {
                 if (_currentScaledImage == null || _originalImage == null)
                 {
                     lblMouseCoords.Text = "(X: -, Y: -)";
-                    return;
-                }
-
-                int sW = _currentScaledImage.Width;
-                int sH = _currentScaledImage.Height;
-
-                // Координаты курсора относительно области изображения
-                int relX = e.X - _offsetX;
-                int relY = e.Y - _offsetY;
-
-                if (relX >= 0 && relX < sW && relY >= 0 && relY < sH)
-                {
-                    float imgXf = relX / _zoomFactor;
-                    float imgYf = relY / _zoomFactor;
-
-                    int ix = Math.Min(Math.Max((int)imgXf, 0), _originalImage.Width - 1);
-                    int iy = Math.Min(Math.Max((int)imgYf, 0), _originalImage.Height - 1);
-
-                    lblMouseCoords.Text = $"(X: {ix}, Y: {iy})";
                 }
                 else
                 {
-                    lblMouseCoords.Text = "(X: -, Y: -)";
+                    int sW = _currentScaledImage.Width;
+                    int sH = _currentScaledImage.Height;
+
+                    int relX = e.X - _offsetX;
+                    int relY = e.Y - _offsetY;
+                    if (relX >= 0 && relX < sW && relY >= 0 && relY < sH)
+                    {
+                        float imgXf = relX / _zoomFactor;
+                        float imgYf = relY / _zoomFactor;
+                        int ix = Math.Min(Math.Max((int)imgXf, 0), _originalImage.Width - 1);
+                        int iy = Math.Min(Math.Max((int)imgYf, 0), _originalImage.Height - 1);
+                        lblMouseCoords.Text = $"(X: {ix}, Y: {iy})";
+                    }
+                    else
+                    {
+                        lblMouseCoords.Text = "(X: -, Y: -)";
+                    }
                 }
 
-                // Если мы в режиме пана (ПКМ зажата), панорамируем
+                // Панорамирование ПКМ
                 if (_isPanning && _currentScaledImage != null)
                 {
                     int dx = e.X - _panStartMouseX;
@@ -368,7 +363,6 @@ namespace client
                     _offsetX = _panStartOffsetX + dx;
                     _offsetY = _panStartOffsetY + dy;
 
-                    // Проверим границы по X
                     int imgW = _currentScaledImage.Width;
                     int boxW = picBox.ClientSize.Width;
                     if (imgW > boxW)
@@ -382,7 +376,6 @@ namespace client
                         _offsetX = (boxW - imgW) / 2;
                     }
 
-                    // Проверим границы по Y
                     int imgH = _currentScaledImage.Height;
                     int boxH = picBox.ClientSize.Height;
                     if (imgH > boxH)
@@ -400,34 +393,24 @@ namespace client
                 }
             };
 
-            //
             // MouseWheel для зума
-            //
             picBox.MouseWheel += PicBox_MouseWheel;
 
-            //
-            // Paint для отрисовки изображения, маркеров и координат
-            //
+            // Paint для отрисовки изображения и маркеров/полигона
             picBox.Paint += PicBox_Paint;
 
-            //
-            // MouseDown/MouseUp для панорамы (ПКМ)
-            //
+            // MouseDown/MouseUp для панорамирования (ПКМ)
             picBox.MouseDown += PicBox_MouseDown;
             picBox.MouseUp   += PicBox_MouseUp;
 
-            //
-            // Resize picBox: пересчитываем центр/панораму картинки
-            //
+            // Смена размера picBox: центруем картинку
             picBox.Resize += (sender, e) =>
             {
                 CenterImageInView();
                 picBox.Invalidate();
             };
 
-            //
             // Смена пресетов WW/WL
-            //
             cmbPresets.SelectedIndexChanged += (sender, e) =>
             {
                 if (cmbPresets.SelectedItem is not string selName) return;
@@ -448,58 +431,86 @@ namespace client
                 }
             };
 
-            //
-            // Ввод в WW/WL вручную → переключаемся на «Пользовательские»
-            //
+            // Ввод вручную WW/WL → переключаем на «Пользовательские»
             txtWindowWidth.TextChanged += (sender, e) => OnWindowTextChanged();
             txtWindowLevel.TextChanged += (sender, e) => OnWindowTextChanged();
 
-            //
-            // Кнопка HU: включаем HU-режим
-            //
+            // Кнопка HU
             btnHU.Click += (sender, e) =>
             {
+                // При старте HU очищаем все точки
+                ClearAllMarkers();
                 _huMode = true;
                 _rMode = false;
+                _areaMode = false;
+                _rAwaitingSecond = false;
                 btnHU.BackColor = Color.LightBlue;
                 btnR.BackColor  = SystemColors.Control;
-                btnS.BackColor  = SystemColors.Control;
-                ClearAllMarkers();
-                txtResult.Text = "";
+                btnArea.BackColor = SystemColors.Control;
+                btnCompleteArea.BackColor = SystemColors.Control;
+                btnCompleteArea.Enabled = false;
+                // txtResult очищается только при новом ответе, поэтому не трогаем его
             };
 
-            //
-            // Кнопка R: включаем R-режим (линейка)
-            //
+            // Кнопка R
             btnR.Click += (sender, e) =>
             {
+                // При старте R очищаем все точки
+                ClearAllMarkers();
                 _rMode = true;
                 _huMode = false;
+                _areaMode = false;
                 _rAwaitingSecond = false;
                 btnR.BackColor  = Color.LightBlue;
                 btnHU.BackColor = SystemColors.Control;
-                btnS.BackColor  = SystemColors.Control;
-                ClearAllMarkers();
-                txtResult.Text = "";
+                btnArea.BackColor = SystemColors.Control;
+                btnCompleteArea.BackColor = SystemColors.Control;
+                btnCompleteArea.Enabled = false;
+                // txtResult не очищаем
             };
 
-            //
-            // Кнопка S: сбрасываем оба режима
-            //
-            btnS.Click += (sender, e) =>
+            // Кнопка Area (бывшая S)
+            btnArea.Click += (sender, e) =>
             {
-                _rMode = false;
-                _huMode = false;
-                btnS.BackColor  = Color.LightBlue;
-                btnHU.BackColor = SystemColors.Control;
-                btnR.BackColor  = SystemColors.Control;
+                // При старте Area очищаем все точки
                 ClearAllMarkers();
-                txtResult.Text = "";
+                _areaMode = true;
+                _huMode = false;
+                _rMode = false;
+                _rAwaitingSecond = false;
+                btnArea.BackColor = Color.LightBlue;
+                btnHU.BackColor   = SystemColors.Control;
+                btnR.BackColor    = SystemColors.Control;
+                btnCompleteArea.BackColor = SystemColors.Control;
+                btnCompleteArea.Enabled = false;
+                // txtResult не очищаем
+                txtResult.Text = "Нажмите ЛКМ для добавления вершин (≥3).";
+                picBox.Invalidate();
             };
 
-            //
-            // При изменении размера формы (Anchor само двигает контролы)
-            //
+            // Кнопка Завершить Area
+            btnCompleteArea.Click += (sender, e) =>
+            {
+                if (_areaMode)
+                {
+                    _areaMode = false;
+                    btnCompleteArea.BackColor = SystemColors.Control;
+
+                    if (_polygonPoints.Count >= 3)
+                    {
+                        double areaPx  = CalculatePolygonAreaInPixels(_polygonPoints);
+                        double areaMm2 = ConvertPixelsToMm2(areaPx);
+                        txtResult.Text = $"Площадь: {areaMm2:F3} мм²";
+                    }
+                    else
+                    {
+                        txtResult.Text = "Нужно задать минимум 3 точки.";
+                    }
+                    picBox.Invalidate();
+                }
+            };
+
+            // При изменении размера формы
             this.Resize += (sender, e) =>
             {
                 CenterImageInView();
@@ -608,6 +619,7 @@ namespace client
 
             try
             {
+                // Запрос превью-изображения по WW/WL
                 string url = $"api/studies/{_studyId}/series/{_seriesId}/instances/{instId}/preview";
                 bool hasWw = int.TryParse(txtWindowWidth.Text.Trim(), out int ww);
                 bool hasWl = int.TryParse(txtWindowLevel.Text.Trim(), out int wl);
@@ -623,10 +635,16 @@ namespace client
 
                 _originalImage = new Bitmap(loaded);
                 _zoomFactor    = 1.0f;
-                RecalculateCurrentScaledImage();
 
+                // Здесь можно прочитать _pixelSpacingX_mm и _pixelSpacingY_mm из DICOM-метаданных
+
+                RecalculateCurrentScaledImage();
                 CenterImageInView();
                 picBox.Invalidate();
+
+                // При смене кадра HU и Area не сбрасываются (txtResult не трогаем), R-первая точка тоже сохраняется
+                // Но если вы хотите сбрасывать HU и Area, то вызовите ClearHUAndAreaMarkers().
+                ClearHUAndAreaMarkers();
             }
             catch (Exception ex)
             {
@@ -667,9 +685,6 @@ namespace client
                 _offsetY = (boxH - imgH) / 2;
         }
 
-        /// <summary>
-        /// Рисует изображение, маркеры HU / R, и обновляет координаты.
-        /// </summary>
         private void PicBox_Paint(object? sender, PaintEventArgs e)
         {
             if (_currentScaledImage == null || _originalImage == null)
@@ -679,7 +694,7 @@ namespace client
             e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
             e.Graphics.DrawImage(_currentScaledImage, _offsetX, _offsetY, _currentScaledImage.Width, _currentScaledImage.Height);
 
-            // 2) Маркер HU, если он установлен, и совпадает instanceId
+            // 2) Маркер HU (красный квадратик), если задан для текущего instanceId
             if (_huImgX != null && _huImgY != null && _huInstId != null)
             {
                 string currentInst = _instanceIds[trackBar.Value];
@@ -695,7 +710,7 @@ namespace client
                 }
             }
 
-            // 3) Маркеры R: две точки, если заданы, и совпадают instanceId
+            // 3) Маркеры R (зелёные квадратики)
             if (_rImgX1 != null && _rImgY1 != null && _rInstId1 != null)
             {
                 string currentInst = _instanceIds[trackBar.Value];
@@ -720,16 +735,42 @@ namespace client
                     e.Graphics.FillRectangle(brush, screenXf - half, screenYf - half, size, size);
                 }
             }
+
+            // 4) Вершины многоугольника для AreaMode (оранжевые кружки и линии)
+            if (_polygonPoints.Count > 0)
+            {
+                using var pen   = new Pen(Color.Orange, 2);
+                using var brush = new SolidBrush(Color.Orange);
+                for (int i = 0; i < _polygonPoints.Count; i++)
+                {
+                    float screenX = _offsetX + _polygonPoints[i].X * _zoomFactor;
+                    float screenY = _offsetY + _polygonPoints[i].Y * _zoomFactor;
+                    int r = 4;
+                    e.Graphics.FillEllipse(brush, screenX - r, screenY - r, r * 2, r * 2);
+
+                    if (i + 1 < _polygonPoints.Count)
+                    {
+                        float nextX = _offsetX + _polygonPoints[i + 1].X * _zoomFactor;
+                        float nextY = _offsetY + _polygonPoints[i + 1].Y * _zoomFactor;
+                        e.Graphics.DrawLine(pen, screenX, screenY, nextX, nextY);
+                    }
+                }
+                if (_polygonPoints.Count >= 2 && !_areaMode)
+                {
+                    float x0     = _offsetX + _polygonPoints[0].X * _zoomFactor;
+                    float y0     = _offsetY + _polygonPoints[0].Y * _zoomFactor;
+                    float xLast  = _offsetX + _polygonPoints[^1].X * _zoomFactor;
+                    float yLast  = _offsetY + _polygonPoints[^1].Y * _zoomFactor;
+                    e.Graphics.DrawLine(pen, xLast, yLast, x0, y0);
+                }
+            }
         }
 
-        /// <summary>
-        /// Обработчик колесика мыши: зумируем картинку, удерживая курсор на том же месте.
-        /// </summary>
         private void PicBox_MouseWheel(object? sender, MouseEventArgs e)
         {
-            if (_originalImage == null) return;
+            if (_originalImage == null)
+                return;
 
-            // Запомним координаты курсора в координатах оригинала
             int oldImgX = (int)((e.X - _offsetX) / _zoomFactor);
             int oldImgY = (int)((e.Y - _offsetY) / _zoomFactor);
 
@@ -740,7 +781,6 @@ namespace client
 
             RecalculateCurrentScaledImage();
 
-            // Пересчитаем смещение, чтобы курсор оставался над тем же пикселем
             int newScreenX = (int)(oldImgX * _zoomFactor);
             int newScreenY = (int)(oldImgY * _zoomFactor);
             _offsetX = e.X - newScreenX;
@@ -750,14 +790,10 @@ namespace client
             picBox.Invalidate();
         }
 
-        /// <summary>
-        /// При нажатии кнопки мыши: ПКМ начинает панораму, ЛКМ – обработка HU или R.
-        /// </summary>
         private void PicBox_MouseDown(object? sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Right)
             {
-                // Начинаем панораму
                 _isPanning = true;
                 _panStartMouseX = e.X;
                 _panStartMouseY = e.Y;
@@ -778,19 +814,26 @@ namespace client
 
         private void PicBox_MouseMove(object? sender, MouseEventArgs e)
         {
-            // Логика обновления координат и панорамирования реализована в MouseMove через AttachEvents
+            // Панорамирование и обновление координат обрабатываются в AttachEvents
         }
 
         private async void PicBox_MouseClick(object? sender, MouseEventArgs e)
         {
-            // Определяем, в каком режиме мы находимся: HU или R
+            // Приоритет методов: HU → R → Area
             if (_huMode)
             {
                 await HandleHUClickAsync(e);
+                return;
             }
-            else if (_rMode)
+            if (_rMode)
             {
                 await HandleRClickAsync(e);
+                return;
+            }
+            if (_areaMode)
+            {
+                HandleAreaClick(e);
+                return;
             }
         }
 
@@ -803,11 +846,9 @@ namespace client
             if (_currentScaledImage == null || _originalImage == null)
                 return;
 
-            // 1) Переводим координаты клика в пиксели оригинала
             if (!TryGetImageCoordinates(e.X, e.Y, out int imgX, out int imgY))
                 return;
 
-            // Сохраняем маркер HU и выключаем режим
             string currentInst = _instanceIds[trackBar.Value];
             _huImgX   = imgX;
             _huImgY   = imgY;
@@ -816,7 +857,6 @@ namespace client
             btnHU.BackColor = SystemColors.Control;
             picBox.Invalidate();
 
-            // 2) Запрашиваем значение HU у сервера
             try
             {
                 string reqUrl = $"api/instances/{currentInst}/density?x={imgX}&y={imgY}";
@@ -831,15 +871,13 @@ namespace client
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Error
                     );
-                    txtResult.Text = "";
                     return;
                 }
 
-                // Читаем JSON вида {"hu":353}
                 string content = await response.Content.ReadAsStringAsync();
-                using var doc = System.Text.Json.JsonDocument.Parse(content);
+                using var doc = JsonDocument.Parse(content);
                 if (doc.RootElement.TryGetProperty("hu", out var huElement) &&
-                    huElement.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    huElement.ValueKind == JsonValueKind.Number)
                 {
                     int huValue = huElement.GetInt32();
                     txtResult.Text = $"Плотность ткани в точке равна {huValue} HU";
@@ -857,21 +895,18 @@ namespace client
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error
                 );
-                txtResult.Text = "";
             }
         }
 
-
         /// <summary>
-        /// Обрабатывает клик в R-режиме (линейка): последовательно запоминает две точки,
-        /// после второй — запрашивает у сервера расстояние и выводит округлённое до 3 знаков значение.
+        /// Обрабатывает клик в R-режиме (линейка): первая точка может быть на одном кадре,
+        /// вторая — на другом. После второй точек запрашиваем расстояние.
         /// </summary>
         private async Task HandleRClickAsync(MouseEventArgs e)
         {
             if (_currentScaledImage == null || _originalImage == null)
                 return;
 
-            // Конвертируем экранные координаты в пиксели оригинального изображения
             if (!TryGetImageCoordinates(e.X, e.Y, out int imgX, out int imgY))
                 return;
 
@@ -885,6 +920,7 @@ namespace client
                 _rImgY1          = imgY;
                 _rAwaitingSecond = true;
                 picBox.Invalidate();
+                txtResult.Text = "Первая точка линейки выбрана. Перейдите на другой кадр и выберите вторую.";
             }
             else
             {
@@ -897,18 +933,18 @@ namespace client
                 btnR.BackColor   = SystemColors.Control;
                 picBox.Invalidate();
 
-                // Теперь отправляем запрос на сервер
+                txtResult.Text = "Вычисление расстояния...";
+
                 if (_rInstId1 != null && _rImgX1.HasValue && _rImgY1.HasValue
                     && _rInstId2 != null && _rImgX2.HasValue && _rImgY2.HasValue)
                 {
                     try
                     {
                         string url = $"api/distance" +
-                                    $"?instanceId1={_rInstId1}" +
-                                    $"&x1={_rImgX1.Value}&y1={_rImgY1.Value}" +
-                                    $"&instanceId2={_rInstId2}" +
-                                    $"&x2={_rImgX2.Value}&y2={_rImgY2.Value}";
-
+                                     $"?instanceId1={_rInstId1}" +
+                                     $"&x1={_rImgX1.Value}&y1={_rImgY1.Value}" +
+                                     $"&instanceId2={_rInstId2}" +
+                                     $"&x2={_rImgX2.Value}&y2={_rImgY2.Value}";
                         var response = await _httpClient.GetAsync(url);
                         if (!response.IsSuccessStatusCode)
                         {
@@ -919,24 +955,21 @@ namespace client
                                 MessageBoxButtons.OK,
                                 MessageBoxIcon.Error
                             );
-                            txtResult.Text = "";
                             return;
                         }
 
-                        // Разбираем JSON-ответ и округляем значение до 3 знаков
                         using var stream = await response.Content.ReadAsStreamAsync();
-                        using var doc = await System.Text.Json.JsonDocument.ParseAsync(stream);
+                        using var doc = await JsonDocument.ParseAsync(stream);
                         if (doc.RootElement.TryGetProperty("distance", out var element) &&
-                            element.ValueKind == System.Text.Json.JsonValueKind.Number)
+                            element.ValueKind == JsonValueKind.Number)
                         {
                             double distanceMm = element.GetDouble();
-                            // Округляем до 3 знаков после запятой
                             distanceMm = Math.Round(distanceMm, 3);
                             txtResult.Text = $"Расстояние между двумя точками {distanceMm:F3} мм";
                         }
                         else
                         {
-                            txtResult.Text = "Ответ сервера не содержит поле \"distance\".";
+                            txtResult.Text = "Неверный формат ответа: " + await response.Content.ReadAsStringAsync();
                         }
                     }
                     catch (Exception ex)
@@ -947,15 +980,35 @@ namespace client
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Error
                         );
-                        txtResult.Text = "";
                     }
                 }
             }
         }
 
         /// <summary>
-        /// Преобразует координаты мыши (screenX, screenY) в координаты внутри оригинального изображения.
-        /// Возвращает true, если клик попал в область картинки, и тогда imgX/imgY принимают реальные значения.
+        /// Обрабатывает клик в Area-режиме: ЛКМ добавляет вершину,
+        /// btnCompleteArea завершает ввод и считает площадь.
+        /// </summary>
+        private void HandleAreaClick(MouseEventArgs e)
+        {
+            if (_currentScaledImage == null || _originalImage == null)
+                return;
+
+            if (e.Button == MouseButtons.Left)
+            {
+                if (!TryGetImageCoordinates(e.X, e.Y, out int imgX, out int imgY))
+                    return;
+
+                _polygonPoints.Add(new Point(imgX, imgY));
+                picBox.Invalidate();
+                btnCompleteArea.Enabled = true; // активируем кнопку "Завершить"
+                txtResult.Text = $"Вершин: {_polygonPoints.Count}. Нажмите «Завершить» для расчёта.";
+            }
+        }
+
+        /// <summary>
+        /// Преобразует экранные координаты (screenX, screenY) в пиксели оригинального изображения.
+        /// Возвращает true, если клик попал в область картинки, иначе false.
         /// </summary>
         private bool TryGetImageCoordinates(int screenX, int screenY, out int imgX, out int imgY)
         {
@@ -978,7 +1031,29 @@ namespace client
             return true;
         }
 
+        private double CalculatePolygonAreaInPixels(List<Point> pts)
+        {
+            int n = pts.Count;
+            if (n < 3) return 0.0;
 
+            long sum = 0;
+            for (int i = 0; i < n; i++)
+            {
+                int j = (i + 1) % n;
+                sum += (long)pts[i].X * pts[j].Y 
+                     - (long)pts[j].X * pts[i].Y;
+            }
+            return Math.Abs(sum) * 0.5;
+        }
+
+        private double ConvertPixelsToMm2(double areaInPx)
+        {
+            return areaInPx * _pixelSpacingX_mm * _pixelSpacingY_mm;
+        }
+
+        /// <summary>
+        /// Очищает все маркеры, включая R-режимные точки.
+        /// </summary>
         private void ClearAllMarkers()
         {
             _huImgX = null;
@@ -993,8 +1068,23 @@ namespace client
             _rImgX2 = null;
             _rImgY2 = null;
 
+            _polygonPoints.Clear();
+            btnCompleteArea.Enabled = false;
             picBox.Invalidate();
         }
 
+        /// <summary>
+        /// Очищает HU- и Area-маркеры, но сохраняет R-первую точку.
+        /// </summary>
+        private void ClearHUAndAreaMarkers()
+        {
+            _huImgX = null;
+            _huImgY = null;
+            _huInstId = null;
+
+            _polygonPoints.Clear();
+            btnCompleteArea.Enabled = false;
+            picBox.Invalidate();
+        }
     }
 }
