@@ -1,6 +1,5 @@
 namespace client;
 
-
 public class ClientDto
 {
     public int Id { get; set; }

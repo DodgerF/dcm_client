@@ -16,7 +16,6 @@ public class AddClientForm : Form
     private Button btnCancel    = null!;
     private readonly HttpClient _httpClient;
 
-    // разрешаем ровно 4 группы по 4 цифры через пробел
     private static readonly Regex PolicyPattern = 
         new Regex(@"^\d{4}\s\d{4}\s\d{4}\s\d{4}$");
 
