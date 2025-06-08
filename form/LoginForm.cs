@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
+using System.Configuration;
 
 namespace client
 {
@@ -29,9 +30,10 @@ namespace client
             {
                 ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
             };
+            string baseUrlString = ConfigurationManager.AppSettings["ServerBaseUrl"];
             _httpClient = new HttpClient(handler)
             {
-                BaseAddress = new Uri("https://localhost:8444/")
+                BaseAddress = new Uri(baseUrlString)
             };
 
             InitializeComponent();

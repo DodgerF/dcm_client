@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
+
 namespace client
 {
     public class PointDto
@@ -80,9 +81,6 @@ namespace client
 
         private bool _areaMode = false;
         private List<Point> _polygonPoints = new List<Point>();
-
-        private double _pixelSpacingX_mm = 1.0;
-        private double _pixelSpacingY_mm = 1.0;
 
         public SeriesViewerForm(HttpClient httpClient, string studyId, string seriesId, string seriesName)
         {

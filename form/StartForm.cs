@@ -7,6 +7,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Configuration;
 
 namespace client
 {
@@ -38,9 +39,10 @@ namespace client
                 ServerCertificateCustomValidationCallback =
                     HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
             };
+            string baseUrlString = ConfigurationManager.AppSettings["ServerBaseUrl"];
             _httpClient = new HttpClient(handler)
             {
-                BaseAddress = new Uri("https://localhost:8444/")
+                BaseAddress = new Uri(baseUrlString)
             };
             _httpClient.DefaultRequestHeaders.Authorization =
                 new AuthenticationHeaderValue("Bearer", jwtToken);
