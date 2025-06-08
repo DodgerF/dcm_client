@@ -3,22 +3,23 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Net.Http;
-using System.Net.Http.Json;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace client
 {
-    public class Form1 : Form
+    public class StartForm : Form
     {
         private TextBox txtSearch = null!;
         private DataGridView dgvClients = null!;
         private Button btnConfirm = null!;
         private Button btnAddClient = null!;
-        private Button btnBack = null!;
+        private Button btnEditClient = null!;
         private Button btnUploadStudy = null!;
         private Button btnDisplay = null!;
+        private Button btnBack = null!;
         private TextBox txtSelectedName = null!;
         private TextBox txtSelectedPolicy = null!;
 
@@ -26,54 +27,82 @@ namespace client
         private int _selectedClientId;
         private string _selectedStudyId = null!;
 
-        public Form1()
+        private readonly string _userRole;
+
+        public StartForm(string jwtToken, string userRole)
         {
-            var handler = new HttpClientHandler {
+            _userRole = userRole;
+
+            var handler = new HttpClientHandler
+            {
                 ServerCertificateCustomValidationCallback =
                     HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
             };
-            _httpClient = new HttpClient(handler) {
+            _httpClient = new HttpClient(handler)
+            {
                 BaseAddress = new Uri("https://localhost:8444/")
             };
+            _httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", jwtToken);
 
             InitializeComponent();
             SetupSearchGrid();
+
+            if (_userRole != "ROLE_DOCTOR")
+            {
+                btnConfirm.Visible = false;
+            }
         }
 
         private void InitializeComponent()
         {
-            txtSearch = new TextBox {
+            txtSearch = new TextBox
+            {
                 Location = new Point(12, 12),
                 Width = 300,
                 PlaceholderText = "Введите имя, ID или полис"
             };
             txtSearch.KeyDown += TxtSearch_KeyDown;
 
-            btnAddClient = new Button {
+            btnAddClient = new Button
+            {
                 Text = "Добавить пациента",
                 Location = new Point(txtSearch.Right + 10, txtSearch.Top),
                 Size = new Size(130, txtSearch.Height)
             };
-            btnAddClient.Click += async (_, __) => {
+            btnAddClient.Click += async (_, __) =>
+            {
                 using var dlg = new AddClientForm(_httpClient);
                 if (dlg.ShowDialog(this) == DialogResult.OK)
                     await SearchClientsAsync(txtSearch.Text.Trim());
             };
 
-            txtSelectedName = new TextBox {
+            btnEditClient = new Button
+            {
+                Text = "Редактировать пациента",
+                Location = new Point(btnAddClient.Right + 10, txtSearch.Top),
+                Size = new Size(150, txtSearch.Height),
+                Enabled = false
+            };
+            btnEditClient.Click += async (_, __) => await OnEditClientAsync();
+
+            txtSelectedName = new TextBox
+            {
                 Location = new Point(12, 12),
                 Width = 300,
                 ReadOnly = true,
                 Visible = false
             };
-            txtSelectedPolicy = new TextBox {
+            txtSelectedPolicy = new TextBox
+            {
                 Location = new Point(330, 12),
                 Width = 150,
                 ReadOnly = true,
                 Visible = false
             };
 
-            dgvClients = new DataGridView {
+            dgvClients = new DataGridView
+            {
                 Location = new Point(12, 40),
                 Size = new Size(600, 300),
                 ReadOnly = true,
@@ -84,32 +113,35 @@ namespace client
             };
             dgvClients.SelectionChanged += (_, __) => UpdateButtonsState();
 
-            btnConfirm = new Button {
+            btnConfirm = new Button
+            {
                 Text = "Подтвердить",
-                Location = new Point(12, 350),
+                Location = new Point(172, 350),
                 Size = new Size(120, 30),
                 Enabled = false
             };
             btnConfirm.Click += async (_, __) => await OnConfirmAsync();
 
-            btnUploadStudy = new Button {
+            btnUploadStudy = new Button
+            {
                 Text = "Добавить исследование",
-                Location = new Point(140, 350),
+                Location = new Point(12, 350),
                 Size = new Size(150, 30),
                 Visible = false,
                 Enabled = false
             };
             btnUploadStudy.Click += async (_, __) => await OnUploadStudyAsync();
 
-
-            btnDisplay = new Button {
-                Location = new Point(300, 350),
+            btnDisplay = new Button
+            {
+                Location = new Point(172, 350),
                 Size = new Size(120, 30),
                 Visible = false,
                 Enabled = false
             };
-    
-            btnBack = new Button {
+
+            btnBack = new Button
+            {
                 Text = "Назад",
                 Location = new Point(12, 350),
                 Size = new Size(120, 30),
@@ -117,23 +149,32 @@ namespace client
             };
             btnBack.Click += (_, __) => OnBack();
 
-            Controls.AddRange(new Control[] {
-                txtSearch, btnAddClient,
+            Controls.AddRange(new Control[]
+            {
+                txtSearch, btnAddClient, btnEditClient,
                 txtSelectedName, txtSelectedPolicy,
                 dgvClients,
                 btnConfirm, btnUploadStudy, btnDisplay, btnBack
             });
 
-            Text = "Поиск пациентов / Исследования / Серии";
+            Text = "";
             ClientSize = new Size(800, 420);
         }
 
         private void UpdateButtonsState()
         {
             bool has = dgvClients.SelectedRows.Count > 0;
-            if (btnConfirm.Visible)     btnConfirm.Enabled    = has;
-            if (btnUploadStudy.Visible)  btnUploadStudy.Enabled = true;
-            if (btnDisplay.Visible)      btnDisplay.Enabled    = has;
+
+            if (btnConfirm.Visible)
+                btnConfirm.Enabled = has;
+
+            if (btnUploadStudy.Visible)
+                btnUploadStudy.Enabled = has;
+
+            btnEditClient.Enabled = has;
+
+            if (btnDisplay.Visible)
+                btnDisplay.Enabled = has;
         }
 
         private void SetupSearchGrid()
@@ -141,20 +182,26 @@ namespace client
             dgvClients.Columns.Clear();
             dgvClients.Rows.Clear();
 
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colNumber", HeaderText = "№",     Width = 40 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colName",   HeaderText = "ФИО",   DataPropertyName = "FullName",  Width = 250 });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colNumber", HeaderText = "№", Width = 40 });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colName", HeaderText = "ФИО", DataPropertyName = "FullName", Width = 250 });
             dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colPolicy", HeaderText = "Полис", DataPropertyName = "MedPolicy", Width = 150 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colId",     HeaderText = "ID",    DataPropertyName = "Id",        Visible = false });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colId", HeaderText = "ID", DataPropertyName = "Id", Visible = false });
 
-            txtSearch.Visible         = true;
-            btnAddClient.Visible      = true;
-            btnConfirm.Visible        = true;
+            txtSearch.Visible = true;
+            btnAddClient.Visible = true;
+            btnEditClient.Visible = true;
+            btnUploadStudy.Visible = true;
+            btnConfirm.Visible = (_userRole == "ROLE_DOCTOR");
 
-            txtSelectedName.Visible   = false;
+            txtSelectedName.Visible = false;
             txtSelectedPolicy.Visible = false;
-            btnUploadStudy.Visible    = false;
-            btnDisplay.Visible        = false;
-            btnBack.Visible           = false;
+            btnDisplay.Visible = false;
+            btnBack.Visible = false;
+
+            btnConfirm.Enabled = false;
+            btnUploadStudy.Enabled = false;
+            btnEditClient.Enabled = false;
+            btnDisplay.Enabled = false;
         }
 
         private void SetupStudiesGrid()
@@ -162,26 +209,29 @@ namespace client
             dgvClients.Columns.Clear();
             dgvClients.Rows.Clear();
 
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colNumber",  HeaderText = "№",        Width = 40 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colDate",    HeaderText = "Дата",     DataPropertyName = "StudyDate", Width = 150 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colName",    HeaderText = "Название", DataPropertyName = "StudyName", Width = 250 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colStudyId", HeaderText = "StudyId",  DataPropertyName = "StudyId",   Visible = false });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colNumber", HeaderText = "№", Width = 40 });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colDate", HeaderText = "Дата", DataPropertyName = "StudyDate", Width = 150 });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colName", HeaderText = "Название", DataPropertyName = "StudyName", Width = 250 });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colStudyId", HeaderText = "StudyId", DataPropertyName = "StudyId", Visible = false });
 
-            txtSearch.Visible         = false;
-            btnAddClient.Visible      = false;
-            btnConfirm.Visible        = false;
+            txtSearch.Visible = false;
+            btnAddClient.Visible = false;
+            btnEditClient.Visible = false;
+            btnUploadStudy.Visible = false;
+            btnConfirm.Visible = false;
 
-            txtSelectedName.Visible   = true;
+            txtSelectedName.Visible = true;
             txtSelectedPolicy.Visible = true;
-            btnUploadStudy.Visible    = true;
-            btnBack.Visible           = true;
-
-            btnDisplay.Visible        = true;
-            btnDisplay.Text           = "Серии";
+            btnBack.Visible = true;
+            btnDisplay.Visible = true;
+            btnDisplay.Text = "Серии";
 
             btnDisplay.Click -= OnSeriesDisplayClicked;
             btnDisplay.Click -= OnSeriesShowClicked;
             btnDisplay.Click += OnSeriesDisplayClicked;
+
+            btnConfirm.Enabled = false;
+            btnUploadStudy.Enabled = false;
             btnDisplay.Enabled = false;
         }
 
@@ -190,24 +240,26 @@ namespace client
             dgvClients.Columns.Clear();
             dgvClients.Rows.Clear();
 
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colNumber",   HeaderText = "№",              Width = 40 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colTitle",    HeaderText = "Название серии", DataPropertyName = "Title", Width = 400 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colSeriesId", HeaderText = "SeriesId",      DataPropertyName = "SeriesId", Visible = false });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colNumber", HeaderText = "№", Width = 40 });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colTitle", HeaderText = "Название серии", DataPropertyName = "Title", Width = 400 });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colSeriesId", HeaderText = "SeriesId", DataPropertyName = "SeriesId", Visible = false });
 
-            txtSearch.Visible         = false;
-            btnAddClient.Visible      = false;
-            btnConfirm.Visible        = false;
-            btnUploadStudy.Visible    = false;
+            txtSearch.Visible = false;
+            btnAddClient.Visible = false;
+            btnEditClient.Visible = false;
+            btnUploadStudy.Visible = false;
+            btnConfirm.Visible = false;
 
-            txtSelectedName.Visible   = true;
+            txtSelectedName.Visible = true;
             txtSelectedPolicy.Visible = true;
-            btnBack.Visible           = true;
+            btnBack.Visible = true;
+            btnDisplay.Visible = true;
+            btnDisplay.Text = "Отобразить";
 
-            btnDisplay.Visible        = true;
-            btnDisplay.Text           = "Отобразить";
             btnDisplay.Click -= OnSeriesDisplayClicked;
             btnDisplay.Click -= OnSeriesShowClicked;
             btnDisplay.Click += OnSeriesShowClicked;
+
             btnDisplay.Enabled = false;
         }
 
@@ -243,12 +295,25 @@ namespace client
             if (dgvClients.SelectedRows.Count == 0) return;
 
             var row = dgvClients.SelectedRows[0];
-            _selectedClientId      = Convert.ToInt32(row.Cells["colId"].Value);
-            txtSelectedName.Text   = row.Cells["colName"].Value?.ToString()  ?? "";
+            _selectedClientId = Convert.ToInt32(row.Cells["colId"].Value);
+            txtSelectedName.Text = row.Cells["colName"].Value?.ToString() ?? "";
             txtSelectedPolicy.Text = row.Cells["colPolicy"].Value?.ToString() ?? "";
 
             SetupStudiesGrid();
             await LoadStudiesAsync(_selectedClientId);
+        }
+
+        private async Task OnEditClientAsync()
+        {
+            if (dgvClients.SelectedRows.Count == 0) return;
+
+            var row = dgvClients.SelectedRows[0];
+            int clientId = Convert.ToInt32(row.Cells["colId"].Value);
+            using var dlg = new EditClientForm(_httpClient, clientId);
+            if (dlg.ShowDialog(this) == DialogResult.OK)
+            {
+                await SearchClientsAsync(txtSearch.Text.Trim());
+            }
         }
 
         private async Task LoadStudiesAsync(int clientId)
@@ -267,11 +332,19 @@ namespace client
 
         private async Task OnUploadStudyAsync()
         {
-            using var dlg = new OpenFileDialog {
+            if (dgvClients.SelectedRows.Count == 0)
+                return;
+
+            var row = dgvClients.SelectedRows[0];
+            int clientId = Convert.ToInt32(row.Cells["colId"].Value);
+
+            using var dlg = new OpenFileDialog
+            {
                 Filter = "ZIP archives (*.zip)|*.zip|All files (*.*)|*.*",
-                Title  = "Выберите ZIP с DICOMDIR"
+                Title = "Выберите ZIP с DICOMDIR"
             };
-            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            if (dlg.ShowDialog(this) != DialogResult.OK)
+                return;
 
             byte[] bytes = await File.ReadAllBytesAsync(dlg.FileName);
             using var content = new MultipartFormDataContent();
@@ -280,9 +353,10 @@ namespace client
             content.Add(zipContent, "archive", Path.GetFileName(dlg.FileName));
 
             var resp = await _httpClient
-                .PostAsync($"api/clients/{_selectedClientId}/studies", content);
+                .PostAsync($"api/clients/{clientId}/studies", content);
             resp.EnsureSuccessStatusCode();
 
+            _selectedClientId = clientId;
             await LoadStudiesAsync(_selectedClientId);
         }
 
@@ -310,6 +384,7 @@ namespace client
 
             UpdateButtonsState();
         }
+
         private void OnSeriesShowClicked(object? sender, EventArgs e)
         {
             if (dgvClients.SelectedRows.Count == 0) return;
@@ -323,6 +398,7 @@ namespace client
             var viewer = new SeriesViewerForm(_httpClient, _selectedStudyId, seriesId, seriesName);
             viewer.Show(this);
         }
+
         private void OnBack()
         {
             if (btnDisplay.Text == "Отобразить")
@@ -336,6 +412,9 @@ namespace client
                 dgvClients.Rows.Clear();
                 txtSearch.Text = "";
                 btnConfirm.Enabled = false;
+                btnUploadStudy.Enabled = false;
+                btnEditClient.Enabled = false;
+                btnDisplay.Enabled = false;
             }
         }
     }
