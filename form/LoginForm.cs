@@ -113,7 +113,7 @@ namespace client
             });
         }
 
-        private async System.Threading.Tasks.Task DoLoginAsync()
+        private async Task DoLoginAsync()
         {
             string username = txtUsername.Text.Trim();
             string password = txtPassword.Text;
@@ -163,7 +163,7 @@ namespace client
             btnVerify.Visible = true;
             txtOtp.Focus();
         }
-        private async System.Threading.Tasks.Task DoVerifyAsync()
+        private async Task DoVerifyAsync()
         {
             string otp = txtOtp.Text.Trim();
             string username = txtUsername.Text.Trim();

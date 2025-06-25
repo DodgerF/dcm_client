@@ -17,7 +17,7 @@ public class AddClientForm : Form
     private readonly HttpClient _httpClient;
 
     private static readonly Regex PolicyPattern = 
-        new Regex(@"^\d{4}\s\d{4}\s\d{4}\s\d{4}$");
+        new Regex(@"^\d{3}-\d{3}-\d{3}\s\d{2}$");
 
     public AddClientForm(HttpClient httpClient)
     {
@@ -45,14 +45,14 @@ public class AddClientForm : Form
         };
 
         var lblPolicy = new Label {
-            Text = "Полис:",
+            Text = "СНИЛС:",
             Location = new Point(10, 50),
             AutoSize = true
         };
         txtPolicy = new TextBox {
             Location = new Point(80, 47),
             Width = 260,
-            PlaceholderText = "xxxx xxxx xxxx xxxx"
+            PlaceholderText = "xxx-xxx-xxx xx"
         };
 
         btnSave = new Button

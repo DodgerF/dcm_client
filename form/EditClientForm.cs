@@ -49,7 +49,7 @@ namespace client
 
             var lblMedPolicy = new Label
             {
-                Text = "Полис:",
+                Text = "СНИЛС:",
                 Location = new Point(20, 60),
                 AutoSize = true
             };

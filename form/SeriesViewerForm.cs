@@ -10,12 +10,6 @@ using System.Windows.Forms;
 
 namespace client
 {
-    public class PointDto
-    {
-        public int x { get; set; }
-        public int y { get; set; }
-    }
-
     public class SeriesViewerForm : Form
     {
         private readonly HttpClient _httpClient;
@@ -112,7 +106,6 @@ namespace client
             picBox.Paint      += PicBox_Paint;
             picBox.MouseClick += PicBox_MouseClick;
             picBox.MouseDown  += PicBox_MouseDown;
-            picBox.MouseMove  += PicBox_MouseMove;
             picBox.MouseUp    += PicBox_MouseUp;
 
             lblMouseCoords = new Label
@@ -813,11 +806,6 @@ namespace client
                 _isPanning = false;
                 picBox.Cursor = Cursors.Default;
             }
-        }
-
-        private void PicBox_MouseMove(object? sender, MouseEventArgs e)
-        {
-
         }
 
         private async void PicBox_MouseClick(object? sender, MouseEventArgs e)

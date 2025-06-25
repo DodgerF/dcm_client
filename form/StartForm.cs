@@ -62,7 +62,7 @@ namespace client
             {
                 Location = new Point(12, 12),
                 Width = 300,
-                PlaceholderText = "Введите имя, ID или полис"
+                PlaceholderText = "Введите имя, ID или СНИЛС"
             };
             txtSearch.KeyDown += TxtSearch_KeyDown;
 
@@ -184,10 +184,23 @@ namespace client
             dgvClients.Columns.Clear();
             dgvClients.Rows.Clear();
 
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colNumber", HeaderText = "№", Width = 40 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colName", HeaderText = "ФИО", DataPropertyName = "FullName", Width = 250 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colPolicy", HeaderText = "Полис", DataPropertyName = "MedPolicy", Width = 150 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colId", HeaderText = "ID", DataPropertyName = "Id", Visible = false });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colNumber",
+                HeaderText = "№",
+                Width = 40
+            });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn
+            { Name = "colName", HeaderText = "ФИО", DataPropertyName = "FullName", Width = 250 });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn
+            { Name = "colPolicy", HeaderText = "СНИЛС", DataPropertyName = "MedPolicy", Width = 150 });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colId",
+                HeaderText = "ID",
+                DataPropertyName = "Id",
+                Visible = false
+            });
 
             txtSearch.Visible = true;
             btnAddClient.Visible = true;
@@ -214,7 +227,13 @@ namespace client
             dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colNumber", HeaderText = "№", Width = 40 });
             dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colDate", HeaderText = "Дата", DataPropertyName = "StudyDate", Width = 150 });
             dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colName", HeaderText = "Название", DataPropertyName = "StudyName", Width = 250 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colStudyId", HeaderText = "StudyId", DataPropertyName = "StudyId", Visible = false });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colStudyId",
+                HeaderText = "StudyId",
+                DataPropertyName = "StudyId",
+                Visible = false
+            });
 
             txtSearch.Visible = false;
             btnAddClient.Visible = false;
@@ -244,7 +263,13 @@ namespace client
 
             dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colNumber", HeaderText = "№", Width = 40 });
             dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colTitle", HeaderText = "Название серии", DataPropertyName = "Title", Width = 400 });
-            dgvClients.Columns.Add(new DataGridViewTextBoxColumn { Name = "colSeriesId", HeaderText = "SeriesId", DataPropertyName = "SeriesId", Visible = false });
+            dgvClients.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colSeriesId",
+                HeaderText = "SeriesId",
+                DataPropertyName = "SeriesId",
+                Visible = false
+            });
 
             txtSearch.Visible = false;
             btnAddClient.Visible = false;
@@ -277,6 +302,12 @@ namespace client
 
         private async Task SearchClientsAsync(string query)
         {
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                dgvClients.Rows.Clear();
+                UpdateButtonsState();
+                return;
+            }
             var url = string.IsNullOrWhiteSpace(query)
                 ? "api/clients"
                 : $"api/clients?q={Uri.EscapeDataString(query)}";

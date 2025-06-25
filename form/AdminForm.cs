@@ -185,17 +185,24 @@ namespace client
             int idx = 1;
             foreach (var emp in list)
             {
+                string displayRole = emp.RoleName switch
+                {
+                    "ROLE_ADMIN"       => "Администратор",
+                    "ROLE_DOCTOR"      => "Врач",
+                    "ROLE_REGISTRATOR" => "Регистратор",
+                    _                  => emp.RoleName
+                };
+
                 dgvEmployees.Rows.Add(
                     idx++,
                     emp.FullName,
                     emp.Username,
-                    emp.RoleName,
+                    displayRole,
                     emp.Id
                 );
             }
             btnDeleteUser.Enabled = false;
         }
-
 
         private async Task DeleteSelectedEmployeeAsync()
         {

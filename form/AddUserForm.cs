@@ -86,7 +86,7 @@ namespace client
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
 
-            cmbRole.Items.AddRange(new string[] { "ROLE_DOCTOR", "ROLE_REGISTRATOR", "ROLE_ADMIN" });
+            cmbRole.Items.AddRange(new string[] { "Врач", "Регистратор", "Администратор" });
             cmbRole.SelectedIndex = 0;
 
             btnSave = new Button
@@ -120,7 +120,7 @@ namespace client
             string fullName = txtFullName.Text.Trim();
             string username = txtUsername.Text.Trim();
             string password = txtPassword.Text;
-            string roleName = cmbRole.SelectedItem.ToString() ?? "ROLE_REGISTRATOR";
+            string roleName = cmbRole.SelectedItem.ToString() ?? "Регистратор";
 
             if (string.IsNullOrEmpty(fullName) ||
                 string.IsNullOrEmpty(username) ||
